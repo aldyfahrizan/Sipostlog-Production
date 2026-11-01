@@ -1,0 +1,25 @@
+# Local smoke test for the Coolify image. Production runs on Coolify itself.
+services:
+  sipostlog:
+    build:
+      context: .
+      args:
+        REACT_APP_BACKEND_URL: ${REACT_APP_BACKEND_URL:-}
+    image: sipostlog:local
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      MONGO_URL: ${MONGO_URL}
+      DB_NAME: ${DB_NAME:-sipostlog}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8000}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH}
+      LOCAL_ADMIN_EMAIL: ${LOCAL_ADMIN_EMAIL:-admin@sipostlog.local}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s

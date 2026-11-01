@@ -13,6 +13,10 @@ credentials.json
 *.key
 .credentials
 memory/test_credentials.md
+.env.coolify
+.env.*.local
 
 frontend/build/
 build/
+__pycache__/
+*.py[cod]

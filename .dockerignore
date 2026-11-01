@@ -1,0 +1,40 @@
+.git
+.gitignore
+.github
+.vercelignore
+.cpanel.yml
+.emergent
+
+# Secrets & local config
+.env
+.env.*
+*.env
+.env.coolify
+CredDev.txt
+*.pem
+*.key
+credentials.json
+secrets.json
+
+# Dependencies & build output
+node_modules
+frontend/node_modules
+frontend/build
+build
+dist
+
+# Python
+__pycache__
+*.py[cod]
+.venv
+venv
+.ruff_cache
+
+# Docs / test artifacts not needed in the image
+test_reports
+plan
+memory
+tests
+backend/tests
+*.md
+!README.md
