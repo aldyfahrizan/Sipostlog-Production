@@ -55,15 +55,18 @@ export default function StockDashboard() {
 
   const rows = useMemo(() => (data?.items || []).filter((i) => (filter === "semua" || i.status === filter) && i.name.toLowerCase().includes(q.toLowerCase())), [data, q, filter]);
 
+  // A stale payload from the other year can still be in state during the async toggle.
+  const is2026 = data?.year === "2026" && data?.realized === true;
+
   if (error) return <div role="alert" data-testid="stock-load-error" className="text-red-700">{error}<button className="btn-ghost ml-3" data-testid="stock-retry-button" onClick={() => setRetry((v) => v + 1)}>Coba lagi</button></div>;
   if (!data) return <Spinner />;
 
-  if (year === "2027") {
+  if (year === "2027" || !is2026) {
     return (
       <div data-testid="stock-dashboard">
         <PageHeader eyebrow="Dashboard Internal" title="Dashboard Stok" description={`Rencana logistik tahun ${year} · ${data.total_items} jenis item.`}
           actions={<YearToggle year={year} onChange={setYear} />} />
-        <Plan2027View data={data} />
+        {year === "2027" ? <Plan2027View data={data} /> : <Spinner />}
       </div>
     );
   }
