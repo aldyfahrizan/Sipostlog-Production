@@ -11,8 +11,9 @@ ENV REACT_APP_BACKEND_URL=$REACT_APP_BACKEND_URL \
     GENERATE_SOURCEMAP=false \
     NODE_OPTIONS=--max-old-space-size=1024
 
-COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci --no-audit --no-fund --ignore-scripts
+COPY frontend/package.json ./
+RUN if [ -f package-lock.json ]; then npm ci --no-audit --no-fund --ignore-scripts; \
+    else npm install --no-audit --no-fund --ignore-scripts; fi
 
 COPY frontend/ ./
 RUN npm run build
