@@ -50,11 +50,7 @@ ACTIVE_TX = {"cancelled": {"$ne": True}}
 
 
 def configured_origins():
-    origins = {o.strip().rstrip("/") for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()}
-    for key in ("VERCEL_URL", "VERCEL_BRANCH_URL", "VERCEL_PROJECT_PRODUCTION_URL"):
-        if os.environ.get(key):
-            origins.add(f"https://{os.environ[key]}")
-    return sorted(origins)
+    return sorted({o.strip().rstrip("/") for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip()})
 
 
 ALLOWED_ORIGINS = configured_origins()
