@@ -1,88 +1,78 @@
-# Panduan Deploy Sipostlog (Vercel + Railway + MongoDB Atlas)
+# Panduan Deploy Sipostlog (Coolify)
 
-Dokumen ini adalah panduan langkah demi langkah untuk membawa Sipostlog dari lingkungan preview ke production. Tidak ada langkah di sini yang otomatis dijalankan oleh agent — semua koneksi akun dan klik "Deploy" dilakukan oleh Anda sendiri di dashboard masing-masing platform.
+Dokumen ini menjelaskan cara menjalankan Sipostlog di **Coolify self-hosted** menggunakan strategi build **Dockerfile**.
 
 ## Arsitektur
-- **Frontend (React/CRA)** → Vercel
-- **Backend (FastAPI)** → Railway.app
-- **Database** → MongoDB Atlas (bukan MongoDB lokal di pod ini — data di pod tidak persisten setelah deploy)
+- **Satu container** menyajikan API FastAPI (`/api/*`) dan SPA React (semua path lain).
+- **Database**: MongoDB yang dikelola Coolify.
+- **Reverse proxy**: Traefik bawaan Coolify (TLS otomatis).
 
-## Status Review Keamanan & Kesiapan (sudah diperbaiki di kode)
-- ✅ Tidak ada API key, password, atau connection string yang ter-hardcode di kode. Semua berasal dari environment variable.
-- ✅ Tidak ada URL localhost/internal yang tertanam permanen — frontend hanya memakai `REACT_APP_BACKEND_URL`, backend hanya memakai `os.environ`.
-- ✅ Cookie sesi login sudah `secure=True, samesite="none"` — sudah benar untuk domain berbeda (Vercel ≠ Railway).
-- ✅ Build frontend (`yarn build`) berhasil tanpa error.
-- ✅ Endpoint backend konsisten memakai prefix `/api`.
-- ✅ Diperbaiki: `backend/server.py` memuat `.env` dengan `override=False` (sebelumnya `True`), sehingga environment variable yang Anda isi di dashboard Railway tidak akan tertimpa file `.env` lokal.
-- ✅ Ditambahkan `memory/test_credentials.md` ke `.gitignore` (berisi kredensial uji, tidak untuk ikut ter-push ke repo publik).
-
-File konfigurasi deploy yang ditambahkan:
-- `backend/Procfile` dan `backend/railway.json` — start command Railway (`uvicorn server:app --host 0.0.0.0 --port $PORT`)
-- `backend/.python-version` — pin Python 3.11.16 di Railway
-- `frontend/vercel.json` — build settings + rewrite untuk client-side routing (React Router)
-
-## Langkah 1 — Buat Database MongoDB Atlas
-1. Daftar di https://www.mongodb.com/cloud/atlas/register (tier gratis M0 cukup untuk awal).
-2. Buat Cluster baru (pilih region terdekat, misalnya Singapore).
-3. Database Access → buat user database baru (username/password, simpan baik-baik).
-4. Network Access → Add IP Address → pilih "Allow Access from Anywhere" (0.0.0.0/0), karena Railway memakai IP dinamis.
-5. Connect → Drivers → copy connection string, bentuknya seperti:
-   `mongodb+srv://<username>:<password>@<cluster>.mongodb.net/?retryWrites=true&w=majority`
-6. Simpan connection string ini — akan dipakai sebagai `MONGO_URL` di Railway.
-
-## Langkah 2 — Deploy Backend ke Railway
-1. Daftar/login di https://railway.app, hubungkan akun GitHub Anda.
-2. Push kode terbaru ke GitHub lewat fitur **"Save to GitHub"** di chat Emergent (bukan lewat agent ini).
-3. Railway → New Project → Deploy from GitHub Repo → pilih repo Sipostlog.
-4. Karena repo ini monorepo (folder `backend/` dan `frontend/` sejajar), di Service Settings Railway:
-   - Set **Root Directory** = `backend`
-   - Railway akan otomatis mendeteksi `railway.json`/`Procfile` di folder tersebut dan menjalankan `uvicorn server:app --host 0.0.0.0 --port $PORT`.
-5. Isi Environment Variables di tab **Variables** Railway (lihat daftar lengkap di bawah).
-6. Deploy. Setelah selesai, Railway akan memberi Anda URL publik, misalnya `https://sipostlog-backend.up.railway.app`. Simpan URL ini.
-7. Test cepat: buka `https://<url-railway-anda>/api/public/items` di browser — harus mengembalikan JSON daftar barang tanpa jumlah stok.
-
-### Environment Variables wajib di Railway (backend)
-| Key | Contoh Nilai | Keterangan |
-|---|---|---|
-| `MONGO_URL` | `mongodb+srv://user:pass@cluster.mongodb.net/?retryWrites=true&w=majority` | Dari MongoDB Atlas (Langkah 1) |
-| `DB_NAME` | `sipostlog` | Nama database, bebas asal konsisten |
-| `CORS_ORIGINS` | `https://sipostlog.vercel.app` | Domain frontend Vercel Anda (isi setelah Langkah 3 selesai, boleh lebih dari satu dipisah koma) |
-| `ADMIN_USERNAME` | `admin` | Username login admin utama |
-| `ADMIN_PASSWORD_HASH` | `$2b$12$...` | Hash bcrypt password admin (gunakan nilai yang sudah ada, atau generate ulang jika ingin ganti password produksi) |
-| `LOCAL_ADMIN_EMAIL` | `admin@sipostlog.local` | Email internal akun admin lokal |
-| `ADMIN_EMAIL` | `aldyfahrizan@gmail.com` | Email yang otomatis mendapat role admin saat login Google |
-| `PORT` | *(otomatis diisi Railway)* | Jangan diisi manual — Railway inject otomatis |
-
-> Catatan: Jika ingin mengganti password admin produksi, generate hash bcrypt baru sebelum deploy (`python3 -c "import bcrypt; print(bcrypt.hashpw(b'PASSWORD_BARU', bcrypt.gensalt()).decode())"`), lalu masukkan hasilnya ke `ADMIN_PASSWORD_HASH`.
-
-## Langkah 3 — Deploy Frontend ke Vercel
-1. Daftar/login di https://vercel.com, hubungkan akun GitHub yang sama.
-2. Add New Project → pilih repo Sipostlog.
-3. Karena monorepo, set **Root Directory** = `frontend` di konfigurasi project Vercel.
-4. Framework Preset akan otomatis terdeteksi sebagai "Create React App" (karena `vercel.json` sudah ditambahkan).
-5. Isi Environment Variable:
-
-| Key | Nilai |
+## File deployment
+| File | Fungsi |
 |---|---|
-| `REACT_APP_BACKEND_URL` | URL backend Railway Anda dari Langkah 2, contoh `https://sipostlog-backend.up.railway.app` (tanpa trailing slash) |
+| `Dockerfile` | Multi-stage: `node:20-alpine` (build CRA) → `python:3.12-slim` (runtime) |
+| `.dockerignore` | Mengecilkan build context |
+| `backend/serve.py` | Entrypoint Uvicorn + mount SPA + fallback client-side routing |
+| `docker-compose.coolify.yml` | Uji image secara lokal |
 
-6. Deploy. Vercel akan memberi domain seperti `https://sipostlog.vercel.app`.
-7. **Kembali ke Railway** → update `CORS_ORIGINS` dengan domain Vercel ini, lalu redeploy backend (Railway auto-redeploy saat env var diubah).
+## Langkah 1 — Siapkan MongoDB di Coolify
+1. Project → **+ New** → **Database** → **MongoDB**.
+2. Catat connection string internal (host `...:27017`) dan kredensial root.
+3. Database aplikasi: `sipostlog` (dibuat otomatis saat pertama kali menulis).
 
-## Langkah 4 — Verifikasi End-to-End
-1. Buka domain Vercel Anda di browser.
-2. Cek halaman publik tampil (katalog barang tanpa jumlah stok, dashboard penyaluran grafik).
-3. Login admin (`/login`) dengan username `admin` dan password sesuai `ADMIN_PASSWORD_HASH` yang dipasang.
-4. Pastikan setelah login masuk ke dashboard, reload halaman tetap login (cookie sesi bekerja cross-domain).
-5. Coba tambah/hapus transaksi untuk memastikan koneksi ke MongoDB Atlas berfungsi.
+## Langkah 2 — Buat Aplikasi
+1. Project → **+ New** → **Application** → **Public Repository** → `aldyfahrizan/Sipostlog-Production`, branch `main`.
+2. **Build Pack**: `Dockerfile`
+3. **Base Directory**: `/`
+4. **Dockerfile Location**: `/Dockerfile`
+5. **Ports Exposes**: `8000`
+6. **Healthcheck Path**: `/api/health`
 
-## Troubleshooting Umum
-- **Login gagal / "Asal permintaan tidak diizinkan"**: `CORS_ORIGINS` di Railway belum memuat domain Vercel yang benar (persis, termasuk `https://` tanpa trailing slash).
-- **Cookie tidak tersimpan setelah login**: pastikan backend Railway diakses lewat HTTPS (otomatis oleh Railway) — cookie `secure=True` tidak akan tersimpan di HTTP biasa.
-- **500 error terkait database**: cek `MONGO_URL` benar dan Network Access di Atlas sudah mengizinkan IP Railway (0.0.0.0/0).
-- **Frontend blank / 404 saat reload halaman dalam**: pastikan `vercel.json` (rewrite ke index.html) ikut ter-deploy — sudah disediakan di `frontend/vercel.json`.
+## Langkah 3 — Environment Variables
+| Key | Contoh | Keterangan |
+|---|---|---|
+| `MONGO_URL` | `mongodb://root:PASSWORD@<service>:27017/?directConnection=true` | Connection string MongoDB Coolify |
+| `DB_NAME` | `sipostlog` | Nama database |
+| `CORS_ORIGINS` | `https://sipostlog.domain.id` | Domain publik aplikasi (pisahkan koma bila lebih dari satu) |
+| `ADMIN_USERNAME` | `admin` | Username admin utama |
+| `ADMIN_PASSWORD_HASH` | `$2b$12$...` | Hash bcrypt password admin |
+| `LOCAL_ADMIN_EMAIL` | `admin@sipostlog.local` | Email internal akun admin lokal |
+| `ADMIN_EMAIL` | `aldyfahrizan@gmail.com` | Email yang otomatis menjadi admin saat login Google |
 
-## Di Luar Cakupan Task Ini
-- Agent tidak melakukan deploy sesungguhnya — Anda perlu klik connect & deploy sendiri di Railway/Vercel.
-- Agent tidak membuat akun MongoDB Atlas/Railway/Vercel untuk Anda.
-- `backend/tests/backend_test.py` (unit test lama) belum diperbaiki — di luar topik kesiapan deploy, aplikasi utama tetap berjalan normal.
+**Build Argument** (opsional): `REACT_APP_BACKEND_URL`
+- Kosongkan bila frontend dan API berada di domain yang sama (disarankan).
+- Isi bila frontend dihosting terpisah, mis. `https://api.domain.id`.
+
+Generate hash password baru:
+```bash
+python3 -c "import bcrypt; print(bcrypt.hashpw(b'PASSWORD_BARU', bcrypt.gensalt()).decode())"
+```
+
+## Langkah 4 — Deploy
+1. Klik **Deploy**. Build pertama memakan waktu ±5–10 menit.
+2. Pantau log build di tab **Deployments**.
+3. Setelah status `running:healthy`, buka domain aplikasi.
+
+## Langkah 5 — Verifikasi
+1. `https://<domain>/api/health` → `{"status":"ok","items":37,...}`
+2. Halaman publik tampil (katalog tanpa angka stok).
+3. Login `/login` dengan `ADMIN_USERNAME` + password.
+4. Reload halaman tetap login (cookie sesi bekerja).
+5. Catat transaksi untuk memastikan koneksi MongoDB berfungsi.
+
+## Catatan VPS 2 GB
+- Build frontend memakai `NODE_OPTIONS=--max-old-space-size=1024` dan `GENERATE_SOURCEMAP=false`.
+- **Swap 2 GB wajib** agar build tidak OOM:
+  ```bash
+  sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
+  sudo mkswap /swapfile && sudo swapon /swapfile
+  echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+  sudo sysctl -w vm.swappiness=10
+  ```
+- Uvicorn dijalankan 1 worker.
+
+## Troubleshooting
+- **`Asal permintaan tidak diizinkan`** → `CORS_ORIGINS` tidak memuat domain persis (termasuk `https://`, tanpa trailing slash).
+- **Build gagal `Killed` / OOM** → swap belum aktif atau RAM habis; cek `free -m` dan `dmesg | tail`.
+- **Container `unhealthy`** → cek log container; pastikan `MONGO_URL` dapat dijangkau dari dalam container.
+- **Login tidak bertahan** → cookie memakai `Secure` + `SameSite=None`, jadi **wajib HTTPS**.

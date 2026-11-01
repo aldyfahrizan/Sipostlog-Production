@@ -1,9 +1,0 @@
-node_modules
-frontend/build
-.ruff_cache
-__pycache__
-test_reports
-plan
-memory
-tests
-backend/tests
