@@ -53,6 +53,15 @@ python3 -c "import bcrypt; print(bcrypt.hashpw(b'PASSWORD_BARU', bcrypt.gensalt(
 2. Pantau log build di tab **Deployments**.
 3. Setelah status `running:healthy`, buka domain aplikasi.
 
+## Langkah 4b — Auto-deploy dari GitHub
+Workflow `.github/workflows/deploy-coolify.yml` memanggil API Coolify setiap ada push/merge ke `main`.
+1. Coolify → **Keys & Tokens** → **API tokens** → buat token dengan izin `deploy`.
+2. GitHub → repo → **Settings → Secrets and variables → Actions → New repository secret**, isi:
+   - `COOLIFY_URL` — alamat panel Coolify, mis. `http://IP-SERVER:8000`
+   - `COOLIFY_TOKEN` — token dari langkah 1
+   - `COOLIFY_APP_UUID` — UUID aplikasi (bagian acak di URL halaman aplikasi di Coolify)
+3. Uji: GitHub → **Actions → Deploy ke Coolify → Run workflow**, lalu pantau tab **Deployments** di Coolify.
+
 ## Langkah 5 — Verifikasi
 1. `https://<domain>/api/health` → `{"status":"ok","items":37,...}`
 2. Halaman publik tampil (katalog tanpa angka stok).
