@@ -56,10 +56,8 @@ python3 -c "import bcrypt; print(bcrypt.hashpw(b'PASSWORD_BARU', bcrypt.gensalt(
 ## Langkah 4b — Auto-deploy dari GitHub
 Workflow `.github/workflows/deploy-coolify.yml` memanggil API Coolify setiap ada push/merge ke `main`.
 1. Coolify → **Keys & Tokens** → **API tokens** → buat token dengan izin `deploy`.
-2. GitHub → repo → **Settings → Secrets and variables → Actions → New repository secret**, isi:
-   - `COOLIFY_URL` — alamat panel Coolify, mis. `http://IP-SERVER:8000`
-   - `COOLIFY_TOKEN` — token dari langkah 1
-   - `COOLIFY_APP_UUID` — UUID aplikasi (bagian acak di URL halaman aplikasi di Coolify)
+2. GitHub → repo → **Settings → Secrets and variables → Actions → New repository secret**, isi `COOLIFY_TOKEN` dengan token dari langkah 1.
+   Alamat panel dan UUID aplikasi sudah diatur di blok `env` workflow; bila berubah, edit di sana atau isi secret `COOLIFY_URL` / `COOLIFY_APP_UUID` untuk menimpanya.
 3. Uji: GitHub → **Actions → Deploy ke Coolify → Run workflow**, lalu pantau tab **Deployments** di Coolify.
 
 ## Langkah 5 — Verifikasi

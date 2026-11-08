@@ -1,10 +1,10 @@
 name: Deploy ke Coolify
 
 # Setiap push/merge ke main memicu deploy ulang aplikasi di Coolify.
-# Butuh 3 repository secret (Settings > Secrets and variables > Actions):
-#   COOLIFY_URL       contoh: http://IP-SERVER:8000   (tanpa garis miring di akhir)
+# Hanya butuh 1 repository secret (Settings > Secrets and variables > Actions):
 #   COOLIFY_TOKEN     API token Coolify (Keys & Tokens > API tokens, izin "deploy")
-#   COOLIFY_APP_UUID  UUID aplikasi SIPOSTLOG (terlihat di URL halaman aplikasi di Coolify)
+# Alamat panel dan UUID aplikasi diatur di blok env di bawah; secret
+# COOLIFY_URL / COOLIFY_APP_UUID (opsional) akan menimpanya bila diisi.
 
 on:
   push:
@@ -15,6 +15,10 @@ concurrency:
   group: coolify-deploy
   cancel-in-progress: false
 
+env:
+  DEFAULT_COOLIFY_URL: http://103.127.96.32:8000
+  DEFAULT_COOLIFY_APP_UUID: x43jcxgopn0ec7h5acs71bbw
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -22,9 +26,9 @@ jobs:
     steps:
       - name: Periksa secret
         env:
-          COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
+          COOLIFY_URL: ${{ secrets.COOLIFY_URL || env.DEFAULT_COOLIFY_URL }}
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
-          COOLIFY_APP_UUID: ${{ secrets.COOLIFY_APP_UUID }}
+          COOLIFY_APP_UUID: ${{ secrets.COOLIFY_APP_UUID || env.DEFAULT_COOLIFY_APP_UUID }}
         run: |
           missing=""
           [ -z "$COOLIFY_URL" ] && missing="$missing COOLIFY_URL"
@@ -37,9 +41,9 @@ jobs:
 
       - name: Picu deploy di Coolify
         env:
-          COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
+          COOLIFY_URL: ${{ secrets.COOLIFY_URL || env.DEFAULT_COOLIFY_URL }}
           COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
-          COOLIFY_APP_UUID: ${{ secrets.COOLIFY_APP_UUID }}
+          COOLIFY_APP_UUID: ${{ secrets.COOLIFY_APP_UUID || env.DEFAULT_COOLIFY_APP_UUID }}
         run: |
           curl --fail-with-body -sS -m 60 \
             -H "Authorization: Bearer $COOLIFY_TOKEN" \
