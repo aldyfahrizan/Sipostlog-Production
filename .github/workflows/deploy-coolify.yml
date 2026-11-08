@@ -1,0 +1,46 @@
+name: Deploy ke Coolify
+
+# Setiap push/merge ke main memicu deploy ulang aplikasi di Coolify.
+# Butuh 3 repository secret (Settings > Secrets and variables > Actions):
+#   COOLIFY_URL       contoh: http://IP-SERVER:8000   (tanpa garis miring di akhir)
+#   COOLIFY_TOKEN     API token Coolify (Keys & Tokens > API tokens, izin "deploy")
+#   COOLIFY_APP_UUID  UUID aplikasi SIPOSTLOG (terlihat di URL halaman aplikasi di Coolify)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: coolify-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Periksa secret
+        env:
+          COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+          COOLIFY_APP_UUID: ${{ secrets.COOLIFY_APP_UUID }}
+        run: |
+          missing=""
+          [ -z "$COOLIFY_URL" ] && missing="$missing COOLIFY_URL"
+          [ -z "$COOLIFY_TOKEN" ] && missing="$missing COOLIFY_TOKEN"
+          [ -z "$COOLIFY_APP_UUID" ] && missing="$missing COOLIFY_APP_UUID"
+          if [ -n "$missing" ]; then
+            echo "::error::Secret belum diisi:$missing"
+            exit 1
+          fi
+
+      - name: Picu deploy di Coolify
+        env:
+          COOLIFY_URL: ${{ secrets.COOLIFY_URL }}
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+          COOLIFY_APP_UUID: ${{ secrets.COOLIFY_APP_UUID }}
+        run: |
+          curl --fail-with-body -sS -m 60 \
+            -H "Authorization: Bearer $COOLIFY_TOKEN" \
+            "${COOLIFY_URL%/}/api/v1/deploy?uuid=${COOLIFY_APP_UUID}&force=false"
