@@ -5,7 +5,8 @@ from fastapi import HTTPException
 
 
 @asynccontextmanager
-async def reserve_stock(db, rows):
+async def reserve_stock_with_token(db, rows):
+    """Lock every listed item; yields (token, {item_id: doc}). Writers must match `_stock_lock: token`."""
     token = uuid.uuid4().hex
     acquired = []
     try:
@@ -19,6 +20,12 @@ async def reserve_stock(db, rows):
             if not doc:
                 raise HTTPException(409, "Stok berubah, barang dihapus, atau sedang diproses. Muat ulang pratinjau.")
             acquired.append(doc)
-        yield {i["id"]: i for i in acquired}
+        yield token, {i["id"]: i for i in acquired}
     finally:
         await db.items.update_many({"_stock_lock": token}, {"$unset": {"_stock_lock": ""}})
+
+
+@asynccontextmanager
+async def reserve_stock(db, rows):
+    async with reserve_stock_with_token(db, rows) as (_, reserved):
+        yield reserved

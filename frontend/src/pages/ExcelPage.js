@@ -1,4 +1,5 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { Download, FileSpreadsheet, FileUp, History, Package, Truck, CheckCircle2, AlertCircle, FileText } from "lucide-react";
 import { toast } from "sonner";
 import { API, downloadFile, errorMessage } from "../lib/api";
@@ -6,6 +7,8 @@ import { PageHeader, Panel } from "../components/StatCard";
 import DateRangePicker from "../components/DateRangePicker";
 import { fmtNum, todayYMD } from "../lib/format";
 import { CancelTransactionButton } from "../components/AdminDeleteControls";
+import BulkImportPanel from "../components/BulkImportPanel";
+import { useAuth } from "../context/AuthContext";
 
 function ExportCard({ icon: Icon, title, desc, onDownload, onPdf, busyKey, busy, testId }) {
   return (
@@ -25,6 +28,14 @@ export default function ExcelPage() {
   const [importResult, setImportResult] = useState(null);
   const [dragging, setDragging] = useState(false);
   const fileRef = useRef();
+  const { user } = useAuth();
+  const canWarehouse = ["admin", "petugas"].includes(user?.role);
+  const location = useLocation();
+  useEffect(() => {
+    if (!location.hash) return;
+    const el = document.getElementById(location.hash.slice(1));
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [location.hash, canWarehouse]);
 
   const dl = async (key, path, name = "laporan.xlsx") => {
     setBusy(key);
@@ -91,6 +102,13 @@ export default function ExcelPage() {
           )}
         </Panel>
       </div>
+
+      {canWarehouse && (
+        <div className="mt-8 grid gap-6 lg:grid-cols-2" data-testid="bulk-import-section">
+          <BulkImportPanel kind="in" />
+          <BulkImportPanel kind="out" />
+        </div>
+      )}
     </div>
   );
 }

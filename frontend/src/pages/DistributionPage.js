@@ -1,5 +1,6 @@
+import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { Truck } from "lucide-react";
+import { Truck, FileSpreadsheet } from "lucide-react";
 import { toast } from "sonner";
 import { api, errorMessage } from "../lib/api";
 import { PageHeader, Panel } from "../components/StatCard";
@@ -36,7 +37,7 @@ export default function DistributionPage() {
 
   return (
     <div data-testid="distribution-page">
-      <PageHeader eyebrow="Transaksi" title="Catat Penyaluran" description="Distribusi logistik ke posko atau wilayah terdampak. Server menolak otomatis jika jumlah melebihi stok tersedia." />
+      <PageHeader eyebrow="Transaksi" title="Catat Penyaluran" description="Distribusi logistik ke posko atau wilayah terdampak. Server menolak otomatis jika jumlah melebihi stok tersedia." actions={<Link to="/app/excel#impor-out" className="btn-ghost" data-testid="bulk-out-shortcut"><FileSpreadsheet size={14} /> Impor dari Excel</Link>} />
       <div className="grid gap-6 lg:grid-cols-[1.2fr_1fr]">
         <Panel testId="distribution-form-panel">
           <form onSubmit={submit} className="space-y-5">
