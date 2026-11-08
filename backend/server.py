@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 from auth import (
     ROLE_ADMIN, ROLE_PENDING, ROLE_PETUGAS, ROLE_OPNAME, exchange_session, get_current_user, logout as do_logout, require_role, public_user,
 )
-from admin_login import AdminLoginBody, UserResponse, login_admin, seed_local_admin
+from admin_login import AdminLoginBody, UserResponse, admin_password_config_ok, login_admin, seed_local_admin
 from excel_utils import build_opname_template, build_workbook, parse_opname_upload
 from pdf_utils import build_pdf_report
 from seed_data import CATALOG_VERSION, DESTINATION_CYCLE, EXPECTED_ITEM_COUNT, INCIDENT_TYPES, INITIAL_ITEMS
@@ -233,7 +233,8 @@ class UserPatch(BaseModel):
 @api.get("/health")
 async def health():
     count = await db.items.count_documents({})
-    return {"status": "ok", "items": count, "expected": EXPECTED_ITEM_COUNT, "time": now_utc().isoformat()}
+    return {"status": "ok", "items": count, "expected": EXPECTED_ITEM_COUNT,
+            "admin_password_config": "ok" if admin_password_config_ok() else "invalid", "time": now_utc().isoformat()}
 
 
 # ---------- auth ----------
