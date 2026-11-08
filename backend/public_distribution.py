@@ -36,15 +36,25 @@ async def public_distribution(request: Request, response: Response, days: int = 
     start = local_today - timedelta(days=days - 1)
     query = {"type": "OUT", "cancelled": {"$ne": True}, "user_id": {"$ne": "system"}, "occurred_at": {"$gte": start.astimezone(timezone.utc), "$lte": now}}
     projection = {"_id": 0, "transaction_id": 1, "occurred_at": 1, "destination": 1,
-                  "item_name": 1, "recipient_kk": 1, "recipient_jiwa": 1}
-    events = []
+                  "item_name": 1, "recipient_kk": 1, "recipient_jiwa": 1, "batch_id": 1}
+    events, by_batch = [], {}
     async for doc in request.app.state.db.transactions.find(query, projection).sort([("occurred_at", -1), ("transaction_id", 1)]):
+        batch_id = doc.get("batch_id")
+        if batch_id and batch_id in by_batch:
+            # One imported BAST = one event; KK/jiwa belong to the batch and are counted once.
+            event = by_batch[batch_id]
+            if doc["item_name"] not in event["item_names"]:
+                event["item_names"].append(doc["item_name"])
+            continue
         occurred = doc["occurred_at"]
         if occurred.tzinfo is None:
             occurred = occurred.replace(tzinfo=timezone.utc)
-        events.append({"event_id": doc["transaction_id"], "occurred_at": occurred,
-                       "location": doc.get("destination") or "Lokasi belum dicatat",
-                       "item_names": [doc["item_name"]], "recipient_kk": doc.get("recipient_kk"),
-                       "recipient_jiwa": doc.get("recipient_jiwa")})
+        event = {"event_id": batch_id or doc["transaction_id"], "occurred_at": occurred,
+                 "location": doc.get("destination") or "Lokasi belum dicatat",
+                 "item_names": [doc["item_name"]], "recipient_kk": doc.get("recipient_kk"),
+                 "recipient_jiwa": doc.get("recipient_jiwa")}
+        events.append(event)
+        if batch_id:
+            by_batch[batch_id] = event
     return {"days": days, "start_date": start.date().isoformat(), "end_date": local_today.date().isoformat(),
             "timezone": "Asia/Makassar", "events": events}

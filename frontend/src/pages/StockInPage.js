@@ -1,5 +1,6 @@
+import { Link } from "react-router-dom";
 import { useState } from "react";
-import { ArrowDownToLine } from "lucide-react";
+import { ArrowDownToLine, FileSpreadsheet } from "lucide-react";
 import { toast } from "sonner";
 import { api, errorMessage } from "../lib/api";
 import { PageHeader, Panel } from "../components/StatCard";
@@ -28,7 +29,7 @@ export default function StockInPage() {
 
   return (
     <div data-testid="stock-in-page">
-      <PageHeader eyebrow="Transaksi" title="Catat Barang Masuk" description="Penerimaan logistik baru dari pengadaan, bantuan, hibah, atau pengembalian. Stok bertambah dan tercatat dalam riwayat." />
+      <PageHeader eyebrow="Transaksi" title="Catat Barang Masuk" description="Penerimaan logistik baru dari pengadaan, bantuan, hibah, atau pengembalian. Stok bertambah dan tercatat dalam riwayat." actions={<Link to="/app/excel#impor-in" className="btn-ghost" data-testid="bulk-in-shortcut"><FileSpreadsheet size={14} /> Impor dari Excel</Link>} />
       <div className="grid gap-6 lg:grid-cols-[1.2fr_1fr]">
         <Panel testId="stock-in-form-panel">
           <form onSubmit={submit} className="space-y-5">

@@ -33,6 +33,7 @@ from public_catalog import router as public_catalog_router
 from public_distribution import router as public_distribution_router
 from distribution_utils import distribution_occurred_at
 from admin_actions import router as admin_actions_router, reconcile_cancellations
+from bulk_import import router as bulk_import_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("sipostlog")
@@ -418,7 +419,7 @@ async def stock_adjust(body: AdjustBody, user=Depends(require_role(*STAFF))):
 @api.get("/transactions")
 async def list_transactions(
     type: Optional[str] = None, item_id: Optional[str] = None, start: Optional[str] = None, end: Optional[str] = None,
-    status: str = "active", limit: int = Query(default=100, ge=1, le=1000), user=Depends(require_role(*STAFF)),
+    batch_id: Optional[str] = None, status: str = "active", limit: int = Query(default=100, ge=1, le=1000), user=Depends(require_role(*STAFF)),
 ):
     if status not in ("active", "cancelled", "all"):
         raise HTTPException(422, "Status transaksi tidak valid.")
@@ -429,7 +430,9 @@ async def list_transactions(
         q["type"] = type
     if item_id:
         q["item_id"] = item_id
-    if start or end:
+    if batch_id:
+        q["batch_id"] = batch_id
+    if (start or end) and not batch_id:
         start_dt, end_dt = date_range(start, end)
         q["occurred_at"] = {"$gte": start_dt, "$lt": end_dt}
     txs = await db.transactions.find(q, {"_id": 0}).sort("occurred_at", -1).limit(limit).to_list(limit)
@@ -647,6 +650,7 @@ app.include_router(management_router)
 app.include_router(public_catalog_router)
 app.include_router(public_distribution_router)
 app.include_router(admin_actions_router)
+app.include_router(bulk_import_router)
 
 
 @app.middleware("http")
