@@ -1,0 +1,42 @@
+name: Cek Aplikasi Live
+
+# Pemeriksaan tanpa password: aplikasi hidup, endpoint login merespons,
+# dan apakah fitur impor massal sudah ter-deploy. Jalankan manual dari tab Actions.
+
+on:
+  workflow_dispatch:
+
+env:
+  APP_URL: http://x43jcxgopn0ec7h5acs71bbw.103.127.96.32.sslip.io
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Kesehatan aplikasi
+        run: |
+          code=$(curl -sS -m 20 -o health.json -w '%{http_code}' "$APP_URL/api/health" || true)
+          echo "HTTP $code"; cat health.json 2>/dev/null; echo
+          [ "$code" = "200" ] || { echo "::error::Aplikasi tidak merespons /api/health (HTTP $code)"; exit 1; }
+
+      - name: Endpoint login (username uji, bukan admin)
+        run: |
+          code=$(curl -sS -m 20 -o login.json -w '%{http_code}' -X POST "$APP_URL/api/auth/login" \
+            -H 'Content-Type: application/json' -H "Origin: $APP_URL" \
+            -d '{"username":"cek-otomatis-github","password":"bukan-password-asli"}' || true)
+          echo "HTTP $code"; cat login.json 2>/dev/null; echo
+          case "$code" in
+            401) echo "Login endpoint OK (menolak kredensial salah sebagaimana mestinya)";;
+            *) echo "::warning::Respons login tidak terduga (HTTP $code)";;
+          esac
+
+      - name: Versi fitur impor massal
+        run: |
+          code=$(curl -sS -m 20 -o /dev/null -w '%{http_code}' "$APP_URL/api/excel/template/in" || true)
+          echo "HTTP $code"
+          case "$code" in
+            401|403) echo "Fitur impor massal SUDAH ter-deploy";;
+            404) echo "::warning::Fitur impor massal BELUM ter-deploy (server masih versi lama)";;
+            *) echo "::warning::Status tidak terduga (HTTP $code)";;
+          esac
