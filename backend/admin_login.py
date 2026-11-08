@@ -1,6 +1,8 @@
 """Local administrator access using the application's existing session store."""
 import hashlib
+import logging
 import os
+import re
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -13,6 +15,24 @@ from starlette.concurrency import run_in_threadpool
 
 from auth import SESSION_DAYS, public_user
 from account_limits import ensure_account_slots, insert_user_with_limit
+
+
+logger = logging.getLogger("sipostlog")
+
+# Full bcrypt hash: $2a/$2b/$2y$, cost, then 53 chars of salt+digest.
+BCRYPT_HASH_RE = re.compile(r"^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$")
+# Valid hash of a random string, used for unknown usernames so timing stays the same.
+_DUMMY_HASH = bcrypt.hashpw(secrets.token_bytes(16), bcrypt.gensalt(rounds=12))
+CONFIG_HINT = ("ADMIN_PASSWORD_HASH tidak valid (kemungkinan terpotong karena tanda $). "
+               "Di Coolify centang 'Is Literal' pada variabel ini, tempel ulang hash lengkap, lalu redeploy.")
+
+
+def bcrypt_hash_is_valid(value) -> bool:
+    return isinstance(value, str) and bool(BCRYPT_HASH_RE.match(value))
+
+
+def admin_password_config_ok() -> bool:
+    return bcrypt_hash_is_valid(os.environ.get("ADMIN_PASSWORD_HASH", ""))
 
 
 class AdminLoginBody(BaseModel):
@@ -35,16 +55,20 @@ class UserResponse(BaseModel):
 
 async def seed_local_admin(db):
     username = os.environ["ADMIN_USERNAME"].strip().lower()
-    password_hash = os.environ["ADMIN_PASSWORD_HASH"]
-    if not username or not password_hash.startswith("$2b$"):
+    password_hash = os.environ["ADMIN_PASSWORD_HASH"].strip()
+    if not username:
         raise RuntimeError("Konfigurasi akun admin tidak valid")
+    hash_ok = bcrypt_hash_is_valid(password_hash)
+    if not hash_ok:
+        # Keep the app (and the admin's previous password) working instead of storing a broken hash.
+        logger.error(CONFIG_HINT)
     await db.users.create_index("username", unique=True, sparse=True)
     await db.login_attempts.create_index("identifier", unique=True)
     await db.login_attempts.create_index("expires_at", expireAfterSeconds=0)
     await db.user_sessions.create_index("expires_at", expireAfterSeconds=0)
     await ensure_account_slots(db)
     existing = await db.users.find_one({"username": username}, {"_id": 0})
-    if not existing:
+    if not existing and hash_ok:
         try:
             await insert_user_with_limit(db, {
                 "user_id": f"user_{uuid.uuid4().hex[:12]}",
@@ -58,7 +82,7 @@ async def seed_local_admin(db):
             # Concurrent startup may have created the same administrator already.
             if not await db.users.find_one({"username": username}, {"_id": 0, "user_id": 1}):
                 raise
-    if existing and existing.get("password_hash") != password_hash:
+    if existing and hash_ok and existing.get("password_hash") != password_hash:
         await db.users.update_one({"user_id": existing["user_id"]}, {"$set": {"password_hash": password_hash}})
         await db.user_sessions.delete_many({"user_id": existing["user_id"]})
 
@@ -78,7 +102,10 @@ async def login_admin(body: AdminLoginBody, request: Request, response: Response
     if attempt["count"] > 5:
         raise HTTPException(429, "Terlalu banyak percobaan masuk. Coba lagi dalam 15 menit.", headers={"Retry-After": "900"})
     user = await db.users.find_one({"username": username, "auth_method": "password"}, {"_id": 0})
-    password_hash = user["password_hash"] if user else os.environ["ADMIN_PASSWORD_HASH"]
+    password_hash = user.get("password_hash", "") if user else _DUMMY_HASH.decode()
+    if user and not bcrypt_hash_is_valid(password_hash):
+        logger.error("Hash kata sandi tersimpan untuk '%s' rusak. %s", username, CONFIG_HINT)
+        raise HTTPException(503, "Konfigurasi kata sandi admin di server rusak. Hubungi pengelola server (lihat log aplikasi).")
     password_bytes = body.password.encode("utf-8")
     valid = len(password_bytes) <= 72 and await run_in_threadpool(bcrypt.checkpw, password_bytes, password_hash.encode())
     if not valid or not user:
