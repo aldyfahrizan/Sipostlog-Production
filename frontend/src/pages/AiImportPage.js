@@ -108,7 +108,7 @@ export default function AiImportPage() {
     <div data-testid="ai-import-page">
       <PageHeader eyebrow="Transaksi" title="Input dari Dokumen (AI)" description="Unggah dokumen Word, Excel, PDF, hasil scan, atau foto. AI membaca isinya dan mengisi daftar barang; Anda memeriksa, memperbaiki bila perlu, lalu menyimpan." />
 
-      {status && !status.ai_enabled && <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800" data-testid="ai-disabled"><AlertTriangle size={15} className="mt-0.5 shrink-0" />Pembaca AI belum aktif. Admin perlu mengisi OPENROUTER_API_KEY di pengaturan server (Coolify → Environment Variables), lalu Redeploy.</div>}
+      {status && !status.ai_enabled && <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800" data-testid="ai-disabled"><AlertTriangle size={15} className="mt-0.5 shrink-0" />Pembaca AI belum aktif. Admin perlu mengisi kunci AI di pengaturan server (lihat tombol Tes koneksi AI di halaman SOP Penggunaan), lalu Redeploy.</div>}
 
       <div className="mb-4 flex flex-wrap gap-2" role="tablist">
         {Object.entries(KINDS).filter(([k]) => kinds.includes(k)).map(([k, v]) => (

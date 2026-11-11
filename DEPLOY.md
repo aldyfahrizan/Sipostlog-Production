@@ -38,6 +38,10 @@ Dokumen ini menjelaskan cara menjalankan Sipostlog di **Coolify self-hosted** me
 | `ADMIN_PASSWORD_HASH` | `$2b$12$...` | Hash bcrypt password admin |
 | `LOCAL_ADMIN_EMAIL` | `admin@sipostlog.local` | Email internal akun admin lokal |
 | `ADMIN_EMAIL` | `aldyfahrizan@gmail.com` | Email yang otomatis menjadi admin saat login Google |
+| `AI_BASE_URL` | `https://<host-penyedia>/v1` | (Opsional) Penyedia AI kompatibel OpenAI (mis. Kelontong AI). Bila diisi bersama `AI_API_KEY`, dipakai menggantikan OpenRouter |
+| `AI_API_KEY` | `sk-...` | Kunci API penyedia tersebut. Jangan pernah ditulis di repo |
+| `AI_MODEL` | nama model teks | Wajib bila memakai `AI_BASE_URL` |
+| `AI_VISION_MODEL` | nama model yang bisa membaca gambar | (Opsional) Untuk scan/foto; bila kosong memakai `AI_MODEL` |
 | `OPENROUTER_API_KEY` | `sk-or-v1-...` | (Opsional) Mengaktifkan **Tanya AI** di halaman SOP dan menu **Input dari Dokumen (AI)**. Buat gratis di openrouter.ai → Keys |
 | `OPENROUTER_MODEL` | `meta-llama/llama-3.3-70b-instruct:free` | (Opsional) Paksa satu model; bila kosong server memilih model `:free` yang tersedia |
 | `OPENROUTER_VISION_MODEL` | `google/gemma-3-27b-it:free` | (Opsional) Model pembaca gambar untuk menu **Input dari Dokumen (AI)** (scan/foto); bila kosong server memilih model `:free` yang bisa membaca gambar |

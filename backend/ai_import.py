@@ -258,8 +258,7 @@ def _public(preview: dict) -> dict:
 # ---------- endpoints ----------
 @router.get("/status")
 async def status(user=Depends(require_role(*ROLES["opname"]))):
-    import os
-    return {"ai_enabled": bool(os.environ.get("OPENROUTER_API_KEY", "").strip()), "formats": list(ALLOWED_EXT),
+    return {"ai_enabled": knowledge.ai_enabled(), "formats": list(ALLOWED_EXT),
             "kinds": [k for k, roles in ROLES.items() if user["role"] in roles]}
 
 
