@@ -36,6 +36,7 @@ from admin_actions import router as admin_actions_router, reconcile_cancellation
 from bulk_import import router as bulk_import_router
 from sop import router as sop_router
 from knowledge import router as knowledge_router
+from ai_import import router as ai_import_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("sipostlog")
@@ -656,6 +657,7 @@ app.include_router(admin_actions_router)
 app.include_router(bulk_import_router)
 app.include_router(sop_router)
 app.include_router(knowledge_router)
+app.include_router(ai_import_router)
 
 
 @app.middleware("http")

@@ -130,36 +130,48 @@ def select_context(question: str, sources: list[tuple[str, str]], limit: int = C
 _model_cache = {"at": 0.0, "models": []}
 
 
-async def free_models(client: httpx.AsyncClient) -> list[str]:
-    configured = os.environ.get("OPENROUTER_MODEL", "").strip()
+FALLBACK_VISION_MODELS = ["google/gemma-3-27b-it:free", "qwen/qwen2.5-vl-72b-instruct:free",
+                          "meta-llama/llama-3.2-11b-vision-instruct:free", "mistralai/mistral-small-3.2-24b-instruct:free"]
+_vision_cache = {"at": 0.0, "models": []}
+
+
+def _reads_images(model: dict) -> bool:
+    arch = model.get("architecture") or {}
+    return "image" in (arch.get("input_modalities") or []) or "image" in str(arch.get("modality", "")).split("->")[0]
+
+
+async def free_models(client: httpx.AsyncClient, vision: bool = False) -> list[str]:
+    configured = os.environ.get("OPENROUTER_VISION_MODEL" if vision else "OPENROUTER_MODEL", "").strip()
     if configured:
         return [configured]
-    if time.time() - _model_cache["at"] < 3600 and _model_cache["models"]:
-        return _model_cache["models"]
+    cache, fallback = (_vision_cache, FALLBACK_VISION_MODELS) if vision else (_model_cache, FALLBACK_FREE_MODELS)
+    if time.time() - cache["at"] < 3600 and cache["models"]:
+        return cache["models"]
     try:
         r = await client.get(f"{OPENROUTER_URL}/models")
         r.raise_for_status()
         found = [m["id"] for m in r.json().get("data", [])
-                 if m.get("id", "").endswith(":free") and (m.get("context_length") or 0) >= 16000]
-        preferred = [m for m in FALLBACK_FREE_MODELS if m in found]
-        models = (preferred + [m for m in found if m not in preferred])[:6] or FALLBACK_FREE_MODELS
+                 if m.get("id", "").endswith(":free") and (m.get("context_length") or 0) >= 16000
+                 and (not vision or _reads_images(m))]
+        preferred = [m for m in fallback if m in found]
+        models = (preferred + [m for m in found if m not in preferred])[:6] or fallback
     except (httpx.HTTPError, ValueError, KeyError):
-        models = FALLBACK_FREE_MODELS
-    _model_cache.update(at=time.time(), models=models)
+        models = fallback
+    cache.update(at=time.time(), models=models)
     return models
 
 
-async def ask_openrouter(messages: list[dict]) -> tuple[str, str]:
+async def ask_openrouter(messages: list[dict], vision: bool = False, max_tokens: int = 1200) -> tuple[str, str]:
     key = os.environ.get("OPENROUTER_API_KEY", "").strip()
     if not key:
         raise HTTPException(503, "Fitur Tanya AI belum diaktifkan. Admin perlu mengisi OPENROUTER_API_KEY di pengaturan server.")
     headers = {"Authorization": f"Bearer {key}", "X-Title": "SIPOSTLOG BPBD Kabupaten Banjar"}
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=90) as client:
         last_error = ""
-        for model in await free_models(client):
+        for model in await free_models(client, vision):
             try:
                 r = await client.post(f"{OPENROUTER_URL}/chat/completions", headers=headers,
-                                      json={"model": model, "messages": messages, "max_tokens": 1200})
+                                      json={"model": model, "messages": messages, "max_tokens": max_tokens})
             except httpx.HTTPError as e:
                 last_error = type(e).__name__
                 continue
