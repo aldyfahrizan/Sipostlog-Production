@@ -102,6 +102,30 @@ function Chat({ enabled }) {
   );
 }
 
+function AiTest({ enabled, provider }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const run = async () => {
+    setBusy(true); setResult(null);
+    try { const { data } = await api.post("/sop/ai-test"); setResult(data); }
+    catch (e) { setResult({ ok: false, text: { ok: false, detail: errorMessage(e) }, vision: {} }); }
+    finally { setBusy(false); }
+  };
+  const line = (label, r) => r && (r.ok !== undefined) && (
+    <li className={r.ok ? "text-emerald-700" : "text-red-700"}>{r.ok ? "✓" : "✗"} {label}: {r.ok ? `berhasil (model ${r.model})` : r.detail}</li>
+  );
+  return (
+    <div className="mt-4 rounded-lg border border-slate-200 p-3 text-xs" data-testid="sop-ai-test">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="text-slate-500">Mesin AI: <b>{provider === "custom" ? "penyedia sendiri (AI_BASE_URL)" : provider === "openrouter" ? "OpenRouter" : "belum diatur"}</b></span>
+        <button onClick={run} disabled={busy} className="btn-ghost !py-1 text-xs" data-testid="sop-ai-test-button">{busy ? "Menguji…" : "Tes koneksi AI"}</button>
+      </div>
+      {!enabled && <p className="mt-2 text-amber-700" data-testid="sop-ai-disabled">AI belum aktif. Di Coolify → Environment Variables isi <b>AI_BASE_URL</b>, <b>AI_API_KEY</b>, dan <b>AI_MODEL</b> (penyedia kompatibel OpenAI, mis. Kelontong AI), atau <b>OPENROUTER_API_KEY</b>, lalu Redeploy.</p>}
+      {result && <ul className="mt-2 space-y-1" data-testid="sop-ai-test-result">{line("Teks (Tanya AI, Word/Excel/PDF)", result.text)}{line("Gambar (scan/foto)", result.vision)}</ul>}
+    </div>
+  );
+}
+
 export default function SopAssistant() {
   const { isAdmin } = useAuth();
   const [state, setState] = useState({ documents: [], ai_enabled: false, loaded: false });
@@ -114,7 +138,7 @@ export default function SopAssistant() {
         <Chat enabled={state.ai_enabled} />
         <Documents docs={state.documents} isAdmin={isAdmin} onChanged={load} />
       </div>
-      {state.loaded && !state.ai_enabled && isAdmin && <p className="mt-3 text-xs text-amber-700" data-testid="sop-ai-disabled">Tanya AI belum aktif: isi variabel OPENROUTER_API_KEY di Coolify (Environment Variables), lalu Redeploy.</p>}
+      {state.loaded && isAdmin && <AiTest enabled={state.ai_enabled} provider={state.ai_provider} />}
     </Panel>
   );
 }

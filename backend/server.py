@@ -35,7 +35,7 @@ from distribution_utils import distribution_occurred_at
 from admin_actions import router as admin_actions_router, reconcile_cancellations
 from bulk_import import router as bulk_import_router
 from sop import router as sop_router
-from knowledge import router as knowledge_router
+from knowledge import ai_config, router as knowledge_router
 from ai_import import router as ai_import_router
 
 logging.basicConfig(level=logging.INFO)
@@ -237,7 +237,8 @@ class UserPatch(BaseModel):
 async def health():
     count = await db.items.count_documents({})
     return {"status": "ok", "items": count, "expected": EXPECTED_ITEM_COUNT,
-            "admin_password_config": "ok" if admin_password_config_ok() else "invalid", "time": now_utc().isoformat()}
+            "admin_password_config": "ok" if admin_password_config_ok() else "invalid",
+            "ai": ai_config()["provider"], "time": now_utc().isoformat()}
 
 
 # ---------- auth ----------

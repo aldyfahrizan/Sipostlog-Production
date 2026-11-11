@@ -110,6 +110,7 @@ def test_ask_without_key_gives_clear_message(client, monkeypatch):
     monkeypatch.delenv("OPENROUTER_API_KEY")
     r = client.post("/api/sop/ask", headers=h("petugas"), json={"question": "Bagaimana mencatat penyaluran?"})
     assert r.status_code == 503 and "OPENROUTER_API_KEY" in r.json()["detail"]
+    assert client.get("/api/health").json()["ai"] == "off"
 
 
 def test_rate_limit(client, monkeypatch):
@@ -125,3 +126,50 @@ def test_select_context_prefers_matching_chunk():
     sources = [("A", "Penyaluran harus mencantumkan jumlah KK dan jiwa."), ("B", "Gula pasir disimpan di rak kering.")]
     picked = knowledge.select_context("jumlah KK penyaluran", sources)
     assert picked[0][0] == "A"
+
+
+class _Resp:
+    def __init__(self, status, body):
+        self.status_code, self._body, self.text = status, body, str(body)
+
+    def json(self):
+        return self._body
+
+
+def _fake_http(monkeypatch, responder):
+    calls = []
+
+    class Client:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, headers=None, json=None):
+            calls.append({"url": url, "headers": headers, "json": json})
+            return responder(url, json)
+        async def get(self, url): raise knowledge.httpx.ConnectError("no network in tests")
+    monkeypatch.setattr(knowledge.httpx, "AsyncClient", Client)
+    return calls
+
+
+def test_custom_openai_compatible_provider_is_used(client, monkeypatch):
+    monkeypatch.setenv("AI_BASE_URL", "https://api.penyedia.example/v1/")
+    monkeypatch.setenv("AI_API_KEY", "kunci-rahasia")
+    monkeypatch.setenv("AI_MODEL", "model-teks")
+    monkeypatch.setenv("AI_VISION_MODEL", "model-gambar")
+    calls = _fake_http(monkeypatch, lambda url, body: _Resp(200, {"choices": [{"message": {"content": "siap"}}]}))
+    r = client.post("/api/sop/ai-test", headers=h("admin")).json()
+    assert r["provider"] == "custom" and r["ok"] is True and r["vision"]["model"] == "model-gambar"
+    assert calls[0]["url"] == "https://api.penyedia.example/v1/chat/completions"
+    assert calls[0]["headers"]["Authorization"] == "Bearer kunci-rahasia" and calls[0]["json"]["model"] == "model-teks"
+    assert "kunci-rahasia" not in str(r)
+    assert client.get("/api/health").json()["ai"] == "custom"
+    assert client.post("/api/sop/ai-test", headers=h("petugas")).status_code == 403
+
+
+def test_ai_test_reports_upstream_reason(client, monkeypatch):
+    monkeypatch.setenv("AI_BASE_URL", "https://api.penyedia.example/v1")
+    monkeypatch.setenv("AI_API_KEY", "salah")
+    monkeypatch.setenv("AI_MODEL", "model-teks")
+    _fake_http(monkeypatch, lambda url, body: _Resp(401, {"error": {"message": "Invalid API key"}}))
+    r = client.post("/api/sop/ai-test", headers=h("admin")).json()
+    assert r["ok"] is False and "Invalid API key" in r["text"]["detail"]

@@ -4,7 +4,8 @@ Admin uploads .docx files; their text is stored in MongoDB. Staff ask questions;
 the most relevant passages (keyword scoring, no embeddings needed) from the built-in SOP and the
 uploaded documents and asks an OpenRouter model to answer only from those passages.
 
-Config (environment): OPENROUTER_API_KEY (required for answers), OPENROUTER_MODEL (optional; when
+Config (environment): either AI_BASE_URL + AI_API_KEY + AI_MODEL (+ AI_VISION_MODEL) for any OpenAI-compatible
+provider, or OPENROUTER_API_KEY (required for answers), OPENROUTER_MODEL (optional; when
 unset the server picks an available ":free" model from OpenRouter's model list).
 """
 import logging
@@ -161,34 +162,72 @@ async def free_models(client: httpx.AsyncClient, vision: bool = False) -> list[s
     return models
 
 
+def ai_config() -> dict:
+    """Which AI provider is configured. A custom OpenAI-compatible provider (AI_*) wins over OpenRouter."""
+    env = lambda k: os.environ.get(k, "").strip()  # noqa: E731
+    if env("AI_API_KEY") and env("AI_BASE_URL"):
+        return {"provider": "custom", "base_url": env("AI_BASE_URL").rstrip("/"), "key": env("AI_API_KEY"),
+                "model": env("AI_MODEL"), "vision_model": env("AI_VISION_MODEL") or env("AI_MODEL")}
+    if env("OPENROUTER_API_KEY"):
+        return {"provider": "openrouter", "base_url": OPENROUTER_URL, "key": env("OPENROUTER_API_KEY"), "model": "", "vision_model": ""}
+    return {"provider": "off"}
+
+
+def ai_enabled() -> bool:
+    return ai_config()["provider"] != "off"
+
+
+NOT_CONFIGURED = ("Mesin AI belum diaktifkan. Admin perlu mengisi OPENROUTER_API_KEY, atau AI_BASE_URL + AI_API_KEY + AI_MODEL "
+                  "(penyedia lain yang kompatibel OpenAI), di pengaturan server lalu Redeploy.")
+
+
+def _upstream_error(r: httpx.Response) -> str:
+    try:
+        body = r.json()
+        err = body.get("error", body) if isinstance(body, dict) else body
+        text = err.get("message") if isinstance(err, dict) else str(err)
+    except ValueError:
+        text = r.text
+    return f"HTTP {r.status_code}: {str(text or '')[:160]}"
+
+
 async def ask_openrouter(messages: list[dict], vision: bool = False, max_tokens: int = 1200) -> tuple[str, str]:
-    key = os.environ.get("OPENROUTER_API_KEY", "").strip()
-    if not key:
-        raise HTTPException(503, "Fitur Tanya AI belum diaktifkan. Admin perlu mengisi OPENROUTER_API_KEY di pengaturan server.")
-    headers = {"Authorization": f"Bearer {key}", "X-Title": "SIPOSTLOG BPBD Kabupaten Banjar"}
+    """Ask the configured provider (name kept for callers); returns (answer, model)."""
+    cfg = ai_config()
+    if cfg["provider"] == "off":
+        raise HTTPException(503, NOT_CONFIGURED)
+    headers = {"Authorization": f"Bearer {cfg['key']}", "X-Title": "SIPOSTLOG BPBD Kabupaten Banjar"}
     async with httpx.AsyncClient(timeout=90) as client:
+        if cfg["provider"] == "custom":
+            model = cfg["vision_model"] if vision else cfg["model"]
+            if not model:
+                raise HTTPException(503, "AI_MODEL belum diisi. Isi nama model dari penyedia AI Anda di pengaturan server.")
+            models = [model]
+        else:
+            models = await free_models(client, vision)
         last_error = ""
-        for model in await free_models(client, vision):
+        for model in models:
             try:
-                r = await client.post(f"{OPENROUTER_URL}/chat/completions", headers=headers,
+                r = await client.post(f"{cfg['base_url']}/chat/completions", headers=headers,
                                       json={"model": model, "messages": messages, "max_tokens": max_tokens})
             except httpx.HTTPError as e:
-                last_error = type(e).__name__
+                last_error = f"tidak bisa menghubungi {cfg['base_url']} ({type(e).__name__})"
                 continue
-            if r.status_code == 401:
-                raise HTTPException(503, "Kunci OpenRouter ditolak. Periksa OPENROUTER_API_KEY di pengaturan server.")
+            if r.status_code in (401, 403):
+                raise HTTPException(503, f"Kunci API AI ditolak ({_upstream_error(r)}). Periksa kunci di pengaturan server.")
             if r.status_code != 200:
-                last_error = f"HTTP {r.status_code}"
-                logger.warning("OpenRouter %s gagal: %s", model, r.text[:200])
+                last_error = _upstream_error(r)
+                logger.warning("AI %s gagal: %s", model, last_error)
                 continue
             try:
                 answer = (r.json()["choices"][0]["message"]["content"] or "").strip()
             except (KeyError, IndexError, ValueError, TypeError):
-                last_error = "respons tidak terbaca"
+                last_error = "respons tidak terbaca (penyedia mungkin tidak kompatibel OpenAI)"
                 continue
             if answer:
                 return answer, model
-        raise HTTPException(503, f"Layanan AI gratis sedang sibuk atau mencapai batas harian ({last_error}). Coba lagi beberapa saat lagi.")
+            last_error = "jawaban kosong"
+        raise HTTPException(503, f"Mesin AI tidak menjawab: {last_error}. Coba lagi beberapa saat lagi.")
 
 
 # ---------- endpoints ----------
@@ -205,7 +244,7 @@ def _public_doc(d: dict) -> dict:
 @router.get("/documents")
 async def list_documents(request: Request, user=Depends(require_role(*STAFF))):
     docs = await request.app.state.db.knowledge_docs.find({}, {"_id": 0, "text": 0}).sort("uploaded_at", -1).to_list(MAX_DOCS)
-    return {"documents": [_public_doc(d) for d in docs], "ai_enabled": bool(os.environ.get("OPENROUTER_API_KEY", "").strip())}
+    return {"documents": [_public_doc(d) for d in docs], "ai_enabled": ai_enabled(), "ai_provider": ai_config()["provider"]}
 
 
 @router.post("/documents", status_code=201)
@@ -229,6 +268,27 @@ async def upload_document(request: Request, file: UploadFile = File(...), user=D
            "uploaded_at": datetime.now(timezone.utc)}
     await db.knowledge_docs.insert_one(dict(doc))
     return _public_doc(doc)
+
+
+@router.post("/ai-test")
+async def ai_test(user=Depends(require_role(ROLE_ADMIN))):
+    """Admin-only: make one tiny real call so a dead AI engine explains itself."""
+    cfg = ai_config()
+    result = {"provider": cfg["provider"], "base_url": cfg.get("base_url", ""), "ok": False, "text": {}, "vision": {}}
+    if cfg["provider"] == "off":
+        return {**result, "text": {"ok": False, "detail": NOT_CONFIGURED}}
+    for label, vision in (("text", False), ("vision", True)):
+        content = "Balas dengan satu kata: siap"
+        if vision:  # 1x1 white PNG
+            content = [{"type": "text", "text": "Balas dengan satu kata: siap"}, {"type": "image_url", "image_url": {"url":
+                       "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="}}]
+        try:
+            answer, model = await ask_openrouter([{"role": "user", "content": content}], vision=vision, max_tokens=20)
+            result[label] = {"ok": True, "model": model, "answer": answer[:80]}
+        except HTTPException as e:
+            result[label] = {"ok": False, "detail": e.detail}
+    result["ok"] = result["text"].get("ok", False)
+    return result
 
 
 @router.delete("/documents/{doc_id}")
