@@ -132,6 +132,26 @@ SECTIONS = [
         ],
     },
     {
+        "id": "input-dokumen",
+        "title": "Input dari Dokumen (AI)",
+        "roles": ALL,
+        "paragraphs": [
+            "Menu ini membaca dokumen Word, Excel, PDF, hasil scan, atau foto dengan bantuan AI, lalu mengisi daftar barang secara otomatis. Tersedia untuk Stock Opname (semua petugas) dan Penyaluran (admin dan petugas gudang).",
+        ],
+        "steps": [
+            "Buka menu Input dari Dokumen (AI), pilih tab Stock Opname atau Penyaluran.",
+            "Unggah dokumen (maks. 8 MB). Tunggu sampai AI selesai membaca.",
+            "Cocokkan setiap baris dengan dokumen asli: nama barang, jumlah, dan kepala dokumen. Perbaiki bila ada yang salah; baris berwarna merah wajib diperbaiki atau dihapus.",
+            "Klik Periksa setelah mengubah data, lalu klik Simpan. Catat nomor batch pada dokumen fisik.",
+        ],
+        "rules": [
+            "AI dapat salah membaca, terutama angka pada scan atau foto. Petugas yang menekan Simpan bertanggung jawab atas kebenaran data.",
+            "Perhatikan peringatan satuan (mis. dokumen menulis KARUNG, sistem memakai KG) dan konversikan angkanya lebih dulu.",
+            "Jangan mengunggah dokumen yang memuat data pribadi penerima bantuan, karena isi dokumen dikirim ke layanan AI pihak ketiga.",
+            "Penyimpanan bersifat semua atau tidak sama sekali.",
+        ],
+    },
+    {
         "id": "opname",
         "title": "Stock Opname dan Koreksi Stok",
         "roles": ALL,

@@ -116,10 +116,15 @@ async def build_preview(db, kind: str, content: bytes) -> dict:
         raise HTTPException(400, str(e))
     except Exception:
         raise HTTPException(400, "Berkas Excel tidak dapat dibaca.")
-    header, header_errors = validate_header(kind, parsed["header"])
-    ids = list({r["item_id"] for r in parsed["rows"] if r["item_id"]})
+    return await preview_from(db, kind, parsed["header"], parsed["rows"])
+
+
+async def preview_from(db, kind: str, raw_header: dict, raw_rows: list) -> dict:
+    """Validate a header + rows (from Excel or any other source) against live stock, without writing."""
+    header, header_errors = validate_header(kind, raw_header)
+    ids = list({r["item_id"] for r in raw_rows if r["item_id"]})
     items = {i["id"]: i async for i in db.items.find({"id": {"$in": ids}}, {"_id": 0})}
-    rows = validate_rows(kind, parsed["rows"], items)
+    rows = validate_rows(kind, raw_rows, items)
     if not rows:
         header_errors.append("Belum ada baris yang diisi jumlahnya.")
     row_errors = sum(1 for r in rows if r["error"])
@@ -132,6 +137,33 @@ async def build_preview(db, kind: str, content: bytes) -> dict:
         "row_errors": row_errors, "valid": not header_errors and row_errors == 0,
         "snapshot": snapshot, "_occurred_at": header.get("occurred_at"),
     }
+
+
+async def write_batch(db, kind: str, preview: dict, user: dict, batch: dict) -> list:
+    """Write every row of a valid preview while all its items are locked: all rows or none."""
+    from server import record_transaction
+    header, rows, occurred = preview["header"], preview["rows"], preview["_occurred_at"]
+    lock_rows = [{"item_id": r["item_id"], "previous_quantity": r["current_stock"]} for r in rows]
+    saved = []
+    async with reserve_stock_with_token(db, lock_rows) as (token, locked):
+        for r in rows:  # re-check against locked documents before any write
+            if locked[r["item_id"]]["currentStock"] != r["current_stock"]:
+                raise HTTPException(409, "Stok berubah sejak pratinjau. Unggah ulang berkas untuk melihat angka terbaru.")
+        for r in rows:
+            delta = r["quantity"] if kind == "in" else -r["quantity"]
+            before = await db.items.find_one_and_update(
+                {"id": r["item_id"], "_stock_lock": token}, {"$inc": {"currentStock": delta}},
+                projection={"_id": 0}, return_document=ReturnDocument.BEFORE,
+            )
+            if kind == "in":
+                extra = {"source": header["source"], "notes": r["note"]}
+            else:
+                extra = {"destination": header["destination"], "incident_type": header["incident_type"], "notes": r["note"],
+                         "recipient_kk": header["recipient_kk"], "recipient_jiwa": header["recipient_jiwa"]}
+            tx = await record_transaction("IN" if kind == "in" else "OUT", before, before["currentStock"] + delta,
+                                          user, occurred, **extra, **batch)
+            saved.append(tx)
+    return saved
 
 
 async def _read(file: UploadFile) -> bytes:
@@ -161,7 +193,6 @@ async def bulk_preview(kind: str, request: Request, file: UploadFile = File(...)
 @router.post("/excel/import/{kind}/commit", status_code=201)
 async def bulk_commit(kind: str, request: Request, file: UploadFile = File(...), snapshot: str = Form(...),
                       user=Depends(require_role(*WAREHOUSE))):
-    from server import record_transaction
     db = request.app.state.db
     kind = _kind(kind)
     try:
@@ -175,27 +206,7 @@ async def bulk_commit(kind: str, request: Request, file: UploadFile = File(...),
         raise HTTPException(400, "Masih ada baris yang salah. Perbaiki berkas lalu unggah ulang.")
     if preview["snapshot"] != expected:
         raise HTTPException(409, "Stok berubah sejak pratinjau. Unggah ulang berkas untuk melihat angka terbaru.")
-    header, rows, occurred = preview["header"], preview["rows"], preview["_occurred_at"]
-    batch = {"batch_id": f"batch_{uuid.uuid4().hex[:12]}", "batch_ref": header["ref"], "batch_file": file.filename}
-    lock_rows = [{"item_id": r["item_id"], "previous_quantity": r["current_stock"]} for r in rows]
-    saved = []
-    async with reserve_stock_with_token(db, lock_rows) as (token, locked):
-        for r in rows:  # re-check against locked documents before any write
-            if locked[r["item_id"]]["currentStock"] != r["current_stock"]:
-                raise HTTPException(409, "Stok berubah sejak pratinjau. Unggah ulang berkas untuk melihat angka terbaru.")
-        for r in rows:
-            delta = r["quantity"] if kind == "in" else -r["quantity"]
-            before = await db.items.find_one_and_update(
-                {"id": r["item_id"], "_stock_lock": token}, {"$inc": {"currentStock": delta}},
-                projection={"_id": 0}, return_document=ReturnDocument.BEFORE,
-            )
-            if kind == "in":
-                extra = {"source": header["source"], "notes": r["note"]}
-            else:
-                extra = {"destination": header["destination"], "incident_type": header["incident_type"], "notes": r["note"],
-                         "recipient_kk": header["recipient_kk"], "recipient_jiwa": header["recipient_jiwa"]}
-            tx = await record_transaction("IN" if kind == "in" else "OUT", before, before["currentStock"] + delta,
-                                          user, occurred, **extra, **batch)
-            saved.append(tx)
+    batch = {"batch_id": f"batch_{uuid.uuid4().hex[:12]}", "batch_ref": preview["header"]["ref"], "batch_file": file.filename}
+    saved = await write_batch(db, kind, preview, user, batch)
     return {**batch, "kind": kind, "count": len(saved), "transactions": saved,
             "saved_at": datetime.now(timezone.utc).isoformat()}
