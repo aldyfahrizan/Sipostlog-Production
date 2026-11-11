@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { api, downloadFile, errorMessage } from "../lib/api";
 import { PageHeader, Panel, Spinner } from "../components/StatCard";
 import { ROLE_LABEL } from "../lib/format";
+import SopAssistant from "../components/SopAssistant";
 
 function List({ items, ordered }) {
   const Tag = ordered ? "ol" : "ul";
@@ -52,6 +53,7 @@ export default function SopPage() {
           <button onClick={() => download("docx")} disabled={!!busy} className="btn-ghost" data-testid="sop-download-docx"><FileText size={14} /> {busy === "docx" ? "Menyiapkan…" : "Unduh Word"}</button>
           <button onClick={() => download("pdf")} disabled={!!busy} className="btn-primary" data-testid="sop-download-button"><Download size={14} /> {busy === "pdf" ? "Menyiapkan…" : "Unduh PDF"}</button>
         </>} />
+      <div className="mb-8"><SopAssistant /></div>
       {error && <div role="alert" className="mb-4 text-sm text-red-700">{error}</div>}
       {!data && !error && <Spinner />}
       {data && (

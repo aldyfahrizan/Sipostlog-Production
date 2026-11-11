@@ -38,6 +38,8 @@ Dokumen ini menjelaskan cara menjalankan Sipostlog di **Coolify self-hosted** me
 | `ADMIN_PASSWORD_HASH` | `$2b$12$...` | Hash bcrypt password admin |
 | `LOCAL_ADMIN_EMAIL` | `admin@sipostlog.local` | Email internal akun admin lokal |
 | `ADMIN_EMAIL` | `aldyfahrizan@gmail.com` | Email yang otomatis menjadi admin saat login Google |
+| `OPENROUTER_API_KEY` | `sk-or-v1-...` | (Opsional) Mengaktifkan **Tanya AI** di halaman SOP. Buat gratis di openrouter.ai → Keys |
+| `OPENROUTER_MODEL` | `meta-llama/llama-3.3-70b-instruct:free` | (Opsional) Paksa satu model; bila kosong server memilih model `:free` yang tersedia |
 
 **Build Argument** (opsional): `REACT_APP_BACKEND_URL`
 - Kosongkan bila frontend dan API berada di domain yang sama (disarankan).
@@ -59,6 +61,8 @@ Workflow `.github/workflows/deploy-coolify.yml` memanggil API Coolify setiap ada
 2. GitHub → repo → **Settings → Secrets and variables → Actions → New repository secret**, isi `COOLIFY_TOKEN` dengan token dari langkah 1.
    Alamat panel dan UUID aplikasi sudah diatur di blok `env` workflow; bila berubah, edit di sana atau isi secret `COOLIFY_URL` / `COOLIFY_APP_UUID` untuk menimpanya.
 3. Uji: GitHub → **Actions → Deploy ke Coolify → Run workflow**, lalu pantau tab **Deployments** di Coolify.
+
+> Tanda `$` pada `ADMIN_PASSWORD_HASH` wajib dilindungi: centang **Is Literal** pada variabel tersebut. Tanpa itu Coolify memotong hash dan admin tidak bisa login (`/api/health` menampilkan `admin_password_config: "invalid"`).
 
 ## Langkah 5 — Verifikasi
 1. `https://<domain>/api/health` → `{"status":"ok","items":37,...}`
