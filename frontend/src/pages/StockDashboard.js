@@ -12,10 +12,10 @@ import { fmtDateTime, fmtNum } from "../lib/format";
 import { CancelTransactionButton, DeleteEntityButton } from "../components/AdminDeleteControls";
 import { useAuth } from "../context/AuthContext";
 
-function YearToggle({ year, onChange }) {
+function YearToggle({ year, years, onChange }) {
   return (
     <div className="inline-flex rounded-full border border-ink-700 bg-ink-900/60 p-1" data-testid="year-toggle">
-      {["2026", "2027"].map((y) => (
+      {years.map((y) => (
         <button key={y} onClick={() => onChange(y)} data-testid={`year-toggle-${y}`}
           className={`rounded-full px-3.5 py-1.5 text-xs font-bold transition-colors ${year === y ? "bg-amber-brand text-ink-900" : "text-slate-300 hover:text-white"}`}>
           Tahun {y}
@@ -27,7 +27,7 @@ function YearToggle({ year, onChange }) {
 
 export default function StockDashboard() {
   const { isAdmin } = useAuth();
-  const [year, setYear] = useState("2026");
+  const [year, setYear] = useState(""); // empty: the server answers with the realised (current) year
   const [data, setData] = useState(null);
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("semua");
@@ -40,7 +40,7 @@ export default function StockDashboard() {
   useEffect(() => {
     let active = true;
     setData(null); setError("");
-    api.get("/dashboard/stock", { params: { year } }).then((r) => { if (active) setData(r.data); }).catch((err) => { if (active) setError(errorMessage(err)); });
+    api.get("/dashboard/stock", { params: year ? { year } : {} }).then((r) => { if (active) setData(r.data); }).catch((err) => { if (active) setError(errorMessage(err)); });
     return () => { active = false; };
   }, [year, retry]);
 
@@ -53,18 +53,19 @@ export default function StockDashboard() {
 
   const rows = useMemo(() => (data?.items || []).filter((i) => (filter === "semua" || i.status === filter) && i.name.toLowerCase().includes(q.toLowerCase())), [data, q, filter]);
 
-  // A stale payload from the other year can still be in state during the async toggle.
-  const is2026 = data?.year === "2026" && data?.realized === true;
 
   if (error) return <div role="alert" data-testid="stock-load-error" className="text-red-700">{error}<button className="btn-ghost ml-3" data-testid="stock-retry-button" onClick={() => setRetry((v) => v + 1)}>Coba lagi</button></div>;
   if (!data) return <Spinner />;
 
-  if (year === "2027" || !is2026) {
+  // The server decides which years exist: the realised year follows the calendar, the plan year the RKA data.
+  const toggle = <YearToggle year={data.year} years={[...new Set([data.realized_year, data.plan_year])]} onChange={setYear} />;
+
+  if (!data.realized) {
     return (
       <div data-testid="stock-dashboard">
-        <PageHeader eyebrow="Dashboard Internal" title="Dashboard Stok" description={`Rencana logistik tahun ${year} · ${data.total_items} jenis item.`}
-          actions={<YearToggle year={year} onChange={setYear} />} />
-        {year === "2027" ? <Plan2027View data={data} /> : <Spinner />}
+        <PageHeader eyebrow="Dashboard Internal" title="Dashboard Stok" description={`Rencana logistik tahun ${data.year} · ${data.total_items} jenis item.`}
+          actions={toggle} />
+        <Plan2027View data={data} />
       </div>
     );
   }
@@ -73,8 +74,8 @@ export default function StockDashboard() {
 
   return (
     <div data-testid="stock-dashboard">
-      <PageHeader eyebrow="Dashboard Internal" title="Dashboard Stok" description={`Posisi stok tahun ${year} · ${data.total_items} jenis item logistik.`}
-        actions={<><YearToggle year={year} onChange={setYear} /><button onClick={printStock} disabled={printing} className="btn-ghost" data-testid="stock-export-pdf-button"><FileText size={14} /> {printing ? "Mencetak…" : "Cetak PDF"}</button><Link to="/app/barang-masuk" className="btn-ghost" data-testid="quick-stock-in"><ArrowDownToLine size={14} /> Barang Masuk</Link><Link to="/app/catat-penyaluran" className="btn-primary" data-testid="quick-stock-out"><ArrowUpFromLine size={14} /> Catat Penyaluran</Link></>} />
+      <PageHeader eyebrow="Dashboard Internal" title="Dashboard Stok" description={`Posisi stok tahun ${data.year} · ${data.total_items} jenis item logistik.`}
+        actions={<>{toggle}<button onClick={printStock} disabled={printing} className="btn-ghost" data-testid="stock-export-pdf-button"><FileText size={14} /> {printing ? "Mencetak…" : "Cetak PDF"}</button><Link to="/app/barang-masuk" className="btn-ghost" data-testid="quick-stock-in"><ArrowDownToLine size={14} /> Barang Masuk</Link><Link to="/app/catat-penyaluran" className="btn-primary" data-testid="quick-stock-out"><ArrowUpFromLine size={14} /> Catat Penyaluran</Link></>} />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 stagger">
         <StatCard testId="stat-total-items" label="Jenis Item" value={data.total_items} sub="dalam katalog logistik" accent="slate" icon={Package} />

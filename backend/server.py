@@ -102,6 +102,23 @@ def stock_status(item) -> str:
     return "aman"
 
 
+FIRST_REALIZED_YEAR = 2026
+
+
+def stock_years(items) -> tuple:
+    """(realised year, plan year). The realised year is the current WITA year, never before 2026. The plan
+    year is the year after it once any item has a plan for that year, otherwise the latest year planned
+    (a year already past is never offered as a plan)."""
+    realized = max(now_utc().astimezone(timezone(timedelta(hours=8))).year, FIRST_REALIZED_YEAR)
+    planned = {y for i in items for y in (i.get("planYear") or {}) if y.isdigit()}
+    following = str(realized + 1)
+    return str(realized), following if following in planned or not planned else max(planned | {str(realized)}, key=int)
+
+
+def plan_quantity(item, year: str):
+    return (item.get("planYear") or {}).get(year, 0)
+
+
 def parse_date(value: Optional[str], end=False) -> datetime:
     if not value:
         base = now_utc()
@@ -290,14 +307,15 @@ async def auth_logout(request: Request, response: Response):
 
 # ---------- items (staff) ----------
 @api.get("/items")
-async def list_items(year: str = "2026", user=Depends(require_role(*STAFF))):
+async def list_items(year: Optional[str] = None, user=Depends(require_role(*STAFF))):
     items = await db.items.find({}, {"_id": 0}).sort("id", 1).to_list(200)
-    if year == "2027":
+    realized_year, plan_year = stock_years(items)
+    if year == plan_year != realized_year:
         return [
-            {**clean(i), "currentStock": 0, "status": "rencana" if i["planYear"].get("2027", 0) > 0 else "tidak-dianggarkan", "planQuantity": i["planYear"].get("2027", 0)}
+            {**clean(i), "currentStock": 0, "status": "rencana" if plan_quantity(i, plan_year) > 0 else "tidak-dianggarkan", "planQuantity": plan_quantity(i, plan_year)}
             for i in items
         ]
-    return [{**clean(i), "status": stock_status(i), "planQuantity": i["planYear"].get("2026", 0)} for i in items]
+    return [{**clean(i), "status": stock_status(i), "planQuantity": plan_quantity(i, realized_year)} for i in items]
 
 
 @api.get("/meta/incident-types")
@@ -324,15 +342,16 @@ async def patch_item(item_id: str, body: ItemPatch, user=Depends(require_role(RO
 
 # ---------- dashboards ----------
 @api.get("/dashboard/stock")
-async def dashboard_stock(year: str = "2026", user=Depends(require_role(*STAFF))):
+async def dashboard_stock(year: Optional[str] = None, user=Depends(require_role(*STAFF))):
     items = await db.items.find({}, {"_id": 0}).sort("id", 1).to_list(200)
+    realized_year, plan_year = stock_years(items)
 
-    if year == "2027":
+    if year == plan_year != realized_year:
         categories = {}
         rencana = tidak = 0
         rows = []
         for i in items:
-            plan = i["planYear"].get("2027", 0)
+            plan = plan_quantity(i, plan_year)
             st = "rencana" if plan > 0 else "tidak-dianggarkan"
             rencana += st == "rencana"
             tidak += st == "tidak-dianggarkan"
@@ -340,8 +359,10 @@ async def dashboard_stock(year: str = "2026", user=Depends(require_role(*STAFF))
             c["count"] += 1
             rows.append({**clean(i), "currentStock": 0, "status": st, "planQuantity": plan})
         return {
-            "year": "2027",
+            "year": plan_year,
             "realized": False,
+            "realized_year": realized_year,
+            "plan_year": plan_year,
             "total_items": len(items),
             "status_counts": {"rencana": rencana, "tidak-dianggarkan": tidak},
             "categories": sorted(categories.values(), key=lambda c: -c["count"]),
@@ -362,13 +383,15 @@ async def dashboard_stock(year: str = "2026", user=Depends(require_role(*STAFF))
     async for tx in db.transactions.find({**ACTIVE_TX, "created_at": {"$gte": since}}, {"_id": 0, "type": 1}):
         weekly[tx["type"]] = weekly.get(tx["type"], 0) + 1
     return {
-        "year": "2026",
+        "year": realized_year,
         "realized": True,
+        "realized_year": realized_year,
+        "plan_year": plan_year,
         "total_items": len(items),
         "status_counts": {s: sum(1 for i in items if stock_status(i) == s) for s in ("aman", "menipis", "habis")},
         "categories": sorted(categories.values(), key=lambda c: -c["count"]),
         "low_items": low_items,
-        "items": [{**clean(i), "status": stock_status(i), "planQuantity": i["planYear"].get("2026", 0)} for i in items],
+        "items": [{**clean(i), "status": stock_status(i), "planQuantity": plan_quantity(i, realized_year)} for i in items],
         "recent_transactions": clean(recent),
         "weekly_activity": weekly,
     }
