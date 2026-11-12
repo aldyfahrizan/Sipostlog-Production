@@ -53,6 +53,7 @@ class World:
         self.deploy_polls = 0
         self.deploy_result = "finished"
         self.running_deployment = False
+        self.strip_sensitive = False     # token without read:sensitive: Coolify omits the values
         self.envs = [
             {"key": "MONGO_URL", "value": MONGO_URL, "real_value": MONGO_URL, "is_literal": True, "is_runtime": True},
             {"key": "DB_NAME", "value": "sipostlog", "real_value": "sipostlog"},
@@ -199,6 +200,8 @@ def make_handler(world: World):
             if route == f"/applications/{APP}/logs":
                 return self.send(200, {"logs": APP_LOG})
             if route == f"/applications/{APP}/envs" and method == "GET":
+                if world.strip_sensitive:
+                    return self.send(200, [{"key": env["key"], "is_literal": env.get("is_literal")} for env in world.envs])
                 return self.send(200, world.envs)
             if route == f"/applications/{APP}/envs" and method == "PATCH":
                 for env in world.envs:
@@ -210,9 +213,11 @@ def make_handler(world: World):
                 world.envs.append({"key": body.get("key"), "value": body.get("value"), "real_value": body.get("value")})
                 return self.send(201, {"uuid": "env-new"})
             if route == f"/deployments/applications/{APP}":
-                return self.send(200, {"count": 1, "deployments": [
-                    {"deployment_uuid": "dep0old", "status": "failed", "commit": "abc1234", "is_webhook": True,
-                     "commit_message": "fix: something\n\nbody", "created_at": "2026-11-12T03:27:00Z"}]})
+                history = [{"deployment_uuid": "dep0old", "status": "failed", "commit": "abc1234", "is_webhook": True,
+                            "commit_message": "fix: something\n\nbody", "created_at": "2026-11-12T03:27:00Z"}]
+                if world.running_deployment:
+                    history.insert(0, {"deployment_uuid": "deprunning1", "status": "in_progress", "commit": "def5678"})
+                return self.send(200, {"count": len(history), "deployments": history})
             if route == "/deployments":
                 running = [{"deployment_uuid": "deprunning1", "status": "in_progress", "application_name": "sipostlog",
                             "application_id": "3"}] if world.running_deployment else []
@@ -489,3 +494,20 @@ def test_ai_probe_lists_models_and_chats_without_coolify_token(world, tmp_path):
     bad_url = run(world, tmp_path, {"action": "ai-probe", "token": "", "value": "ftp://x"},
                   extra_env={"SECRET_ENV_AI_API_KEY": AI_KEY})
     assert bad_url.returncode == 1
+
+
+def test_logs_are_refused_when_token_cannot_see_secret_values(world, tmp_path):
+    world.strip_sensitive = True
+    for action in ("app-logs", "db-logs", "deploy-logs"):
+        result = run(world, tmp_path, {"action": action})
+        text = visible(result)
+        assert result.returncode == 1, text
+        assert "read:sensitive" in text
+        assert_no_secret(result, world)
+    status = run(world, tmp_path, {"action": "status"})
+    assert status.returncode == 0 and "MONGO_URL: nilai tidak terlihat" in visible(status)
+
+
+def test_post_error_is_not_hidden_by_get_fallback(world, tmp_path):
+    result = run(world, tmp_path, {"action": "db-restart", "confirm": "ya", "value": "db-does-not-exist"})
+    assert result.returncode == 1 and "Butuh tepat satu database" in visible(result)

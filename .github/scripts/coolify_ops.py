@@ -222,8 +222,10 @@ def api(method: str, path: str, body=None, timeout: int = 30):
 def api_post_or_get(path: str):
     """Coolify moved action endpoints from GET to POST; older panels only answer GET."""
     status, payload = api("POST", path)
-    if status in (404, 405):
-        status, payload = api("GET", path)
+    if status == 405:
+        older_status, older_payload = api("GET", path)
+        if older_status not in (404, 405):
+            return older_status, older_payload
     return status, payload
 
 
@@ -240,9 +242,9 @@ def explain(status: int, payload) -> str:
     if status == 0:
         return f"tidak tersambung ({payload})"
     if status == 401:
-        return "HTTP 401: token ditolak (salah, sudah dicabut, atau API Coolify dimatikan)"
+        return "HTTP 401: token ditolak (salah atau sudah dicabut)"
     if status == 403:
-        return f"HTTP 403: token tidak punya izin untuk ini - {reason(payload)}"
+        return f"HTTP 403: token tidak punya izin untuk ini, atau API Coolify dimatikan - {reason(payload)}"
     return f"HTTP {status}: {reason(payload)}"
 
 
@@ -280,7 +282,9 @@ def load_envs() -> list:
         for field in ("value", "real_value"):
             mask(env.get(field))
             mask_url_credentials(env.get(field))
-    _STATE["env_secrets_loaded"] = True
+    # Coolify strips the values for tokens without read:sensitive (or whose owner is not a team admin).
+    # Then nothing was registered, so free text must not be printed on the strength of this call.
+    _STATE["env_secrets_loaded"] = not envs or any(env.get("value") or env.get("real_value") for env in envs)
     return envs
 
 
@@ -290,11 +294,13 @@ def load_databases() -> list:
         out(f"Daftar database tidak terbaca: {explain(status, payload)}")
         return []
     register_secrets(payload)
-    for database in payload:
-        if isinstance(database, dict) and database.get("public_port"):
+    databases = [item for item in payload if isinstance(item, dict)]
+    for database in databases:
+        if database.get("public_port"):
             mask(database["public_port"], force=True)
-    _STATE["db_secrets_loaded"] = True
-    return [item for item in payload if isinstance(item, dict)]
+    _STATE["db_secrets_loaded"] = not databases or any(
+        database.get("internal_db_url") or database.get("mongo_initdb_root_password") for database in databases)
+    return databases
 
 
 def require_secrets_loaded() -> None:
@@ -304,7 +310,8 @@ def require_secrets_loaded() -> None:
     if not _STATE["db_secrets_loaded"]:
         load_databases()
     if not (_STATE["env_secrets_loaded"] and _STATE["db_secrets_loaded"]):
-        fail("Daftar rahasia tidak bisa dimuat, jadi log tidak dicetak (mencegah kebocoran ke log publik).")
+        fail("Token ini tidak bisa melihat nilai rahasia (butuh izin read:sensitive dan pemilik token admin tim), "
+             "jadi log tidak dicetak: tanpa daftar rahasia, penyamaran di log publik tidak bisa dijamin.")
 
 
 # ---------- lookups ----------
@@ -694,6 +701,8 @@ def act_deploy_logs(inputs: dict) -> None:
     out("  " + fields(deployment, DEPLOY_FIELDS))
     count = int_input(inputs, "lines", 200, 10, 1500)
     lines = deployment_log_lines(deployment)
+    if not deployment.get("logs"):
+        out("  Coolify tidak menyertakan log: token butuh izin read:sensitive dan pemiliknya harus admin tim.")
     section(f"Log deploy ({min(count, len(lines))} dari {len(lines)} baris)")
     for line in lines[-count:]:
         out("  " + line, hide_ips=True)
@@ -814,20 +823,9 @@ def act_db_visibility(inputs: dict, public: bool) -> None:
 
 
 def running_deployment() -> str | None:
-    status, running = api("GET", "/deployments")
-    if status != 200 or not isinstance(running, list):
-        return None
-    status, application = api("GET", f"/applications/{CFG['app']}")
-    names = set()
-    if status == 200 and isinstance(application, dict):
-        register_secrets(application)
-        names = {str(application.get("name")), str(application.get("id"))}
-    for deployment in running:
-        if not isinstance(deployment, dict):
-            continue
-        if str(deployment.get("application_name")) in names or str(deployment.get("application_id")) in names:
-            if deployment.get("status") in ("queued", "in_progress"):
-                return str(deployment.get("deployment_uuid"))
+    for deployment in list_deployments(take=5):
+        if deployment.get("status") in ("queued", "in_progress") and deployment.get("deployment_uuid"):
+            return str(deployment["deployment_uuid"])
     return None
 
 
