@@ -5,9 +5,11 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
 from distribution_utils import WITA
+from public_cache import cached
 from seed_data import INCIDENT_TYPES
 
 router = APIRouter(prefix="/api/public")
+MAX_ROWS = 5000  # hard cap on transaction rows read per request
 
 
 class PublicDistributionEvent(BaseModel):
@@ -33,6 +35,7 @@ class PublicDistributionResponse(BaseModel):
     timezone: str
     incident_types: list[PublicIncidentSummary]
     events: list[PublicDistributionEvent]
+    truncated: bool = False  # more rows existed than MAX_ROWS; only the newest are included
 
 
 @router.get("/distribution", response_model=PublicDistributionResponse)
@@ -40,14 +43,22 @@ async def public_distribution(request: Request, response: Response, days: int = 
     if days not in (7, 14, 30):
         raise HTTPException(422, "Pilih rentang 7, 14, atau 30 hari.")
     response.headers["Cache-Control"] = "no-store"
+    db = request.app.state.db
+    return await cached(db, ("distribution", days), lambda: _load_distribution(db, days))
+
+
+async def _load_distribution(db, days):
     now = datetime.now(timezone.utc)
     local_today = now.astimezone(WITA).replace(hour=0, minute=0, second=0, microsecond=0)
     start = local_today - timedelta(days=days - 1)
     query = {"type": "OUT", "cancelled": {"$ne": True}, "user_id": {"$ne": "system"}, "occurred_at": {"$gte": start.astimezone(timezone.utc), "$lte": now}}
     projection = {"_id": 0, "transaction_id": 1, "occurred_at": 1, "destination": 1,
                   "item_name": 1, "recipient_kk": 1, "recipient_jiwa": 1, "batch_id": 1, "incident_type": 1}
-    events, by_batch = [], {}
-    async for doc in request.app.state.db.transactions.find(query, projection).sort([("occurred_at", -1), ("transaction_id", 1)]):
+    events, by_batch, rows = [], {}, 0
+    async for doc in db.transactions.find(query, projection).sort([("occurred_at", -1), ("transaction_id", 1)]).limit(MAX_ROWS + 1):
+        rows += 1
+        if rows > MAX_ROWS:
+            break
         batch_id = doc.get("batch_id")
         if batch_id and batch_id in by_batch:
             # One imported BAST = one event; KK/jiwa belong to the batch and are counted once.
@@ -72,4 +83,4 @@ async def public_distribution(request: Request, response: Response, days: int = 
                 "locations": len({e["location"] for e in events if e["incident_type"] == t})} for t in INCIDENT_TYPES]
     return {"days": days, "start_date": start.date().isoformat(), "end_date": local_today.date().isoformat(),
             "incident_types": summary,
-            "timezone": "Asia/Makassar", "events": events}
+            "timezone": "Asia/Makassar", "events": events, "truncated": rows > MAX_ROWS}

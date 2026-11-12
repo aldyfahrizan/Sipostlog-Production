@@ -178,6 +178,50 @@ def test_unit_mismatch_is_flagged_as_warning(client):
     assert v["valid"] is True and "KARUNG" in v["rows"][0]["warning"]
 
 
+def test_item_id_that_disagrees_with_document_name_is_flagged(client, monkeypatch):
+    fake_ai(monkeypatch, {"header": OUT_HEADER, "rows": [
+        {"item_id": "beras", "name": "Selimut Tebal", "quantity": 5, "unit": "KG"},   # id steered to another item
+        {"item_id": None, "name": "Mie Instan", "quantity": 2, "unit": "DOS"},         # fuzzy name only
+        {"item_id": "selimut", "name": "", "quantity": 1},                             # id without any name
+    ]})
+    r = client.post("/api/ai-import/out/extract", headers=h(), files={"file": ("bast.docx", docx_bytes(["BAST", "Selimut Tebal 5"]))})
+    assert r.status_code == 200, r.text
+    rows = r.json()["rows"]
+    assert rows[0]["warning"] == "Nama di dokumen (Selimut Tebal) berbeda dari barang yang dipilih (Beras). Periksa lagi."
+    assert "Mie Instan" in rows[1]["warning"] and "Mi Instan" in rows[1]["warning"] and "95%" in rows[1]["warning"]
+    assert "tidak terbaca" in rows[2]["warning"]
+    assert stock(client, "beras") == 1000
+
+
+def test_fuzzy_and_unreadable_name_warnings_survive_recheck(client, monkeypatch):
+    fake_ai(monkeypatch, {"header": OUT_HEADER, "rows": [
+        {"item_id": None, "name": "Mie Instan", "quantity": 2, "unit": "DOS"},
+        {"item_id": "selimut", "name": "", "quantity": 1},
+    ]})
+    r = client.post("/api/ai-import/out/extract", headers=h(), files={"file": ("bast.docx", docx_bytes(["BAST", "Mie Instan 2"]))})
+    assert r.status_code == 200, r.text
+    first = r.json()["rows"]
+    assert [x["match"] for x in first] == ["fuzzy", "id"]
+    rows = [{k: x[k] for k in ("item_id", "quantity", "note", "source_name", "source_unit", "match")} for x in first]
+    v = client.post("/api/ai-import/out/validate", headers=h(), json={"header": OUT_HEADER, "rows": rows})
+    assert v.status_code == 200, v.text
+    again = v.json()["rows"]
+    assert "hanya mirip" in again[0]["warning"] and "tidak terbaca" in again[1]["warning"]
+    assert [x["warning"] for x in again] == [x["warning"] for x in first]
+    bad = client.post("/api/ai-import/out/validate", headers=h(), json={"header": OUT_HEADER, "rows": [{**rows[0], "match": "lain"}]})
+    assert bad.status_code == 422
+
+
+def test_name_mismatch_is_rechecked_on_validate_and_keeps_unit_warning(client):
+    rows = [{"item_id": "beras", "quantity": 10, "source_name": "Selimut Tebal", "source_unit": "KARUNG"},
+            {"item_id": "beras", "quantity": 1, "source_name": "beras"}, {"item_id": "selimut", "quantity": 1}]
+    v = client.post("/api/ai-import/opname/validate", headers=h("opname"), json={"header": {}, "rows": rows[:1] + rows[2:]}).json()
+    assert "berbeda dari barang yang dipilih (Beras)" in v["rows"][0]["warning"] and "KARUNG" in v["rows"][0]["warning"]
+    assert not v["rows"][1].get("warning")  # manual row without a document name
+    v = client.post("/api/ai-import/out/validate", headers=h(), json={"header": OUT_HEADER, "rows": rows[1:2]}).json()
+    assert v["valid"] is True and not v["rows"][0].get("warning")
+
+
 # ---------- stock opname ----------
 def test_opname_commit_sets_physical_stock_and_skips_unchanged(client, monkeypatch):
     fake_ai(monkeypatch, {"header": {"date": "2026-11-05", "ref": "BA-OPN-03"}, "rows": [

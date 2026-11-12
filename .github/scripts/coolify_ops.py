@@ -30,8 +30,8 @@ DEFAULT_URL = "http://103.127.96.32:8000"
 DEFAULT_APP_UUID = "x43jcxgopn0ec7h5acs71bbw"
 DEFAULT_APP_URL = "http://x43jcxgopn0ec7h5acs71bbw.103.127.96.32.sslip.io"
 
-READ_ONLY = {"status", "db-logs", "app-logs", "deploy-logs", "ai-probe"}
-MUTATING = {"db-restart", "db-private", "db-public", "deploy", "env-set", "app-set"}
+READ_ONLY = {"status", "db-logs", "app-logs", "deploy-logs", "ai-probe", "db-backup-status", "db-init"}
+MUTATING = {"db-restart", "db-private", "db-public", "deploy", "env-set", "app-set", "db-backup-enable"}
 
 # Env vars whose values are not secret; everything else is masked by default.
 NON_SECRET_ENV = {
@@ -834,6 +834,131 @@ def act_db_visibility(inputs: dict, public: bool) -> None:
         fail("Aplikasi tidak sehat setelah perubahan.")
 
 
+BACKUP_FIELDS = ["uuid", "frequency", "enabled", "save_s3", "database_backup_retention_amount_locally",
+                 "database_backup_retention_days_locally", "database_backup_retention_max_storage_locally",
+                 "database_backup_retention_amount_s3", "database_backup_retention_days_s3",
+                 "database_backup_retention_max_storage_s3"]
+EXECUTION_FIELDS = ["status", "size", "created_at", "filename"]
+BACKUP_NEW = {"frequency": "0 18 * * *", "enabled": True, "save_s3": False, "backup_now": True,
+              "database_backup_retention_amount_locally": 7, "database_backup_retention_max_storage_locally": 1}
+BACKUP_UNFINISHED = {"running", "queued", "in_progress", "pending"}
+
+
+def short_fields(node: dict, names: list) -> str:
+    """Like fields(), with every value cut short: file names and statuses come from the server as free text."""
+    return fields({name: ((str(node[name]).rsplit("/", 1)[-1] if name == "filename" else str(node[name]))[:160]
+                          if isinstance(node.get(name), str) else node.get(name))
+                   for name in names if isinstance(node, dict) and not isinstance(node.get(name), (dict, list))}, names)
+
+
+def load_backups(uuid: str) -> list:
+    status, payload = api("GET", f"/databases/{uuid}/backups")
+    if status != 200:
+        fail(f"Jadwal backup tidak terbaca: {explain(status, payload)}")
+    register_secrets(payload)
+    if isinstance(payload, dict) and "uuid" in payload and "frequency" in payload:
+        payload = [payload]  # a single schedule returned bare
+    elif isinstance(payload, dict):
+        payload = next((payload[key] for key in ("data", "backups") if isinstance(payload.get(key), list)), None)
+    if not isinstance(payload, list):
+        # Only a real empty list means "no schedule"; anything else must not lead to creating a second one.
+        fail("Jawaban daftar jadwal backup tidak dikenali; tidak ada yang diubah.")
+    return [item for item in payload if isinstance(item, dict)]
+
+
+def load_executions(uuid: str, backup_uuid: str) -> list | None:
+    """Newest first. None when the list could not be read."""
+    if not UUID_LIKE.fullmatch(backup_uuid):
+        return None
+    status, payload = api("GET", f"/databases/{uuid}/backups/{backup_uuid}/executions")
+    if status != 200:
+        out(f"    Riwayat backup tidak terbaca: {explain(status, payload)}")
+        return None
+    register_secrets(payload)
+    if isinstance(payload, dict):
+        payload = payload.get("executions") or payload.get("data") or []
+    executions = [item for item in payload if isinstance(item, dict)] if isinstance(payload, list) else []
+    return sorted(executions, key=lambda item: str(item.get("created_at") or ""), reverse=True)
+
+
+def show_backups(uuid: str, backups: list, take: int = 10) -> None:
+    section("Jadwal backup database")
+    if not backups:
+        out("  Belum ada jadwal backup.")
+    for backup in backups:
+        out(f"  - {short_fields(backup, BACKUP_FIELDS)}")
+        executions = load_executions(uuid, str(backup.get("uuid") or ""))
+        if executions is None:
+            continue
+        if not executions:
+            out("    (belum pernah dijalankan)")
+        for execution in executions[:take]:
+            out(f"    * {short_fields(execution, EXECUTION_FIELDS)}")
+        if len(executions) > take:
+            out(f"    ... dan {len(executions) - take} yang lebih lama")
+
+
+def act_db_backup_status(inputs: dict) -> None:
+    database = find_database(inputs)
+    show_backups(database["uuid"], load_backups(database["uuid"]))
+
+
+def act_db_backup_enable(inputs: dict) -> None:
+    database = find_database(inputs)
+    uuid = database["uuid"]
+    backups = load_backups(uuid)
+    if backups:
+        show_backups(uuid, backups, take=3)
+        out("  Jadwal backup sudah ada; tidak ada yang diubah.")
+        return
+    status, payload = api("POST", f"/databases/{uuid}/backups", body=BACKUP_NEW)
+    if status not in (200, 201) or not isinstance(payload, dict):
+        fail(f"Jadwal backup ditolak: {explain(status, payload)}")
+    backup_uuid = str(payload.get("uuid") or "")
+    section("Jadwal backup dibuat")
+    out(f"  uuid={backup_uuid[:64]}, {short_fields(BACKUP_NEW, BACKUP_FIELDS)}")
+    out("  Backup pertama diminta sekarang; menunggu hasilnya (paling lama 3 menit).")
+    started, first = now(), None
+    while now() - started < 180:
+        pause(10)
+        executions = load_executions(uuid, backup_uuid) or []
+        done = [e for e in executions if str(e.get("status") or "").lower() not in BACKUP_UNFINISHED]
+        state = str(executions[-1].get("status"))[:40] if executions else "belum ada"
+        out(f"  +{int(now() - started):>3}s backup pertama: {state}")
+        if done:
+            first = done[-1]
+            break
+    section("Hasil backup pertama")
+    if first is None:
+        fail("Jadwal sudah dibuat, tetapi backup pertama belum selesai dalam 3 menit. Periksa dengan db-backup-status.")
+    out(f"  {short_fields(first, EXECUTION_FIELDS)}")
+    if str(first.get("status") or "").lower() != "success":
+        fail("Jadwal sudah dibuat, tetapi backup pertama tidak berhasil. Periksa penyebabnya di panel Coolify.")
+    out("  BERHASIL: backup pertama tersimpan di server.")
+
+
+def act_db_init(inputs: dict) -> None:
+    """Report whether the database container runs with Docker's init process.
+
+    Coolify's API (PATCH /databases/{uuid}) does not accept custom_docker_run_options for databases,
+    only for applications, so this action changes nothing: the option is set in the panel.
+    """
+    database = find_database(inputs)
+    section("Proses init container database")
+    # The options themselves are never printed: they can carry anything, including secrets.
+    options = str(database.get("custom_docker_run_options") or "").split()
+    if any(option == "--init" or option.startswith("--init=") for option in options):
+        out("  Opsi init Docker (--init) sudah terpasang di pengaturan database.")
+        out("  Opsi ini baru berlaku setelah container dibuat ulang: jalankan db-restart bila belum.")
+        return
+    out("  Container MongoDB belum memakai proses init, jadi sisa pemeriksaan kesehatan menumpuk sebagai proses zombie.")
+    out("  API Coolify tidak menerima pengaturan ini untuk database, jadi harus diisi lewat panel:")
+    out("    1. Buka panel Coolify, pilih database MongoDB, tab Configuration > General.")
+    out("    2. Di kolom Custom Docker Options, tambahkan --init (opsi yang sudah ada jangan dihapus), lalu Save.")
+    out("    3. Jalankan perintah db-restart di sini agar container dibuat ulang dengan opsi itu.")
+    fail("Opsi init Docker belum terpasang dan tidak bisa diubah lewat API; isi lewat panel Coolify.")
+
+
 def running_deployment() -> str | None:
     for deployment in list_deployments(take=5):
         if deployment.get("status") in ("queued", "in_progress") and deployment.get("deployment_uuid"):
@@ -1049,6 +1174,9 @@ ACTIONS = {
     "db-restart": act_db_restart,
     "db-private": lambda inputs: act_db_visibility(inputs, public=False),
     "db-public": lambda inputs: act_db_visibility(inputs, public=True),
+    "db-backup-status": act_db_backup_status,
+    "db-backup-enable": act_db_backup_enable,
+    "db-init": act_db_init,
     "deploy": act_deploy,
     "env-set": act_env_set,
     "app-set": act_app_set,

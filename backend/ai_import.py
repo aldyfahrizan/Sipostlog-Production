@@ -15,6 +15,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from io import BytesIO
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from openpyxl import load_workbook
@@ -186,7 +187,9 @@ def normalise_extraction(data: dict, catalog: list) -> tuple[dict, list]:
     for r in data.get("rows", [])[:MAX_ROWS]:
         if not isinstance(r, dict):
             continue
-        rows.append({"item_id": match_item(r, by_id, by_name), "quantity": r.get("quantity"),
+        item_id, name = match_item(r, by_id, by_name), str(r.get("name") or "").strip().lower()
+        match = "" if not item_id else "id" if r.get("item_id") == item_id else "name" if name in by_name else "fuzzy"
+        rows.append({"item_id": item_id, "match": match, "quantity": r.get("quantity"),
                      "note": str(r.get("note") or "")[:500], "source_name": str(r.get("name") or "")[:160],
                      "source_unit": str(r.get("unit") or "")[:20]})
     header = data.get("header") if isinstance(data.get("header"), dict) else {}
@@ -200,6 +203,7 @@ class RowIn(BaseModel):
     note: str = Field(default="", max_length=500)
     source_name: str = Field(default="", max_length=160)
     source_unit: str = Field(default="", max_length=20)
+    match: Literal["", "id", "name", "fuzzy"] = ""  # how the item was found; drives the name warnings
 
 
 class DraftBody(BaseModel):
@@ -254,15 +258,34 @@ async def opname_preview(db, raw_header: dict, raw_rows: list) -> dict:
             "snapshot": {r["item_id"]: r["current_stock"] for r in rows if not r["error"]}, "_occurred_at": occurred}
 
 
+def _name_warning(src: dict, out: dict) -> str:
+    """The item id comes from the model; flag rows where the name in the document does not back it up."""
+    name, item_name = str(src.get("source_name") or "").strip(), out.get("item_name")
+    if not src["item_id"] or not item_name or out["error"]:
+        return ""
+    if not name:
+        return "Nama barang tidak terbaca di dokumen. Periksa lagi." if src.get("match") == "id" else ""
+    score = difflib.SequenceMatcher(None, name.lower(), item_name.strip().lower()).ratio()
+    if score < 0.6:
+        return f"Nama di dokumen ({name}) berbeda dari barang yang dipilih ({item_name}). Periksa lagi."
+    if src.get("match") == "fuzzy":
+        return f"Nama di dokumen ({name}) hanya mirip dengan barang yang dipilih ({item_name}), kemiripan {round(score * 100)}%. Periksa lagi."
+    return ""
+
+
 async def draft_preview(db, kind: str, header: dict, rows: list[dict]) -> dict:
     numbered = [{**r, "row": i} for i, r in enumerate(rows, start=1)]
     preview = await (opname_preview(db, header, numbered) if kind == "opname" else preview_from(db, "out", header, numbered))
     for out, src in zip(preview["rows"], numbered):
         out["source_name"], out["source_unit"] = src.get("source_name", ""), src.get("source_unit", "")
+        out["match"] = src.get("match", "")
         if not src["item_id"]:
             out["error"] = "Barang belum dikenali. Pilih barang secara manual."
         elif out["unit"] and src.get("source_unit") and src["source_unit"].strip().lower() != out["unit"].lower() and not out["error"]:
             out["warning"] = f"Satuan di dokumen '{src['source_unit']}' berbeda dari satuan sistem '{out['unit']}'. Periksa angkanya."
+        name_warning = _name_warning(src, out)
+        if name_warning:
+            out["warning"] = " ".join(filter(None, [name_warning, out.get("warning")]))
     preview["row_errors"] = sum(1 for r in preview["rows"] if r["error"])
     preview["valid"] = not preview["header_errors"] and preview["row_errors"] == 0
     return preview

@@ -21,6 +21,13 @@ def _now():
     return datetime.now(timezone.utc)
 
 
+def is_primary_admin(doc: dict) -> bool:
+    """The configured administrator (ADMIN_USERNAME / LOCAL_ADMIN_EMAIL): the account that must always keep access."""
+    username = os.environ["ADMIN_USERNAME"].strip().lower()
+    email = os.environ.get("LOCAL_ADMIN_EMAIL", "").strip().lower()
+    return doc.get("username") == username or bool(email and str(doc.get("email", "")).strip().lower() == email)
+
+
 def public_user(doc: dict) -> dict:
     return {
         "user_id": doc["user_id"],

@@ -1,7 +1,7 @@
 """Bulk Barang Masuk / Penyaluran import: preview first, then save all rows or none."""
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
@@ -10,12 +10,14 @@ from pymongo import ReturnDocument
 from auth import ROLE_ADMIN, ROLE_PETUGAS, require_role
 from bulk_excel import parse_bulk_upload, to_date, to_int, to_time
 from distribution_utils import distribution_occurred_at
+from report_dates import today_wita
 from seed_data import INCIDENT_TYPES
 from stock_lock import LEASE_LOST, held, stock_batch
 
 router = APIRouter(prefix="/api")
 WAREHOUSE = (ROLE_ADMIN, ROLE_PETUGAS)
 KIND_LABEL = {"in": "Barang Masuk", "out": "Penyaluran"}
+MAX_DATE_AGE_DAYS = 730  # 2 tahun
 
 
 def _kind(kind: str) -> str:
@@ -60,6 +62,11 @@ def validate_header(kind: str, raw: dict) -> tuple[dict, list]:
                 header[key] = None
     try:
         day = to_date(raw.get("date"))
+        today = today_wita()
+        if day > today:
+            raise ValueError(f"Tanggal tidak masuk akal: {day:%d/%m/%Y} masih di masa depan.")
+        if day < today - timedelta(days=MAX_DATE_AGE_DAYS):
+            raise ValueError(f"Tanggal tidak masuk akal: {day:%d/%m/%Y} sudah lebih dari 2 tahun lalu.")
         header["date"] = day.isoformat()
     except ValueError as e:
         errors.append(str(e))

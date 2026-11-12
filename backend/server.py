@@ -18,16 +18,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response as RawResponse, JSONResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ReturnDocument
-from pymongo.errors import AutoReconnect, BulkWriteError, ServerSelectionTimeoutError
+from pymongo.errors import AutoReconnect, BulkWriteError, PyMongoError, ServerSelectionTimeoutError
 from pydantic import BaseModel, Field
 
 from auth import (
-    ROLE_ADMIN, ROLE_PENDING, ROLE_PETUGAS, ROLE_OPNAME, exchange_session, get_current_user, logout as do_logout, require_role, public_user,
+    ROLE_ADMIN, ROLE_PENDING, ROLE_PETUGAS, ROLE_OPNAME, exchange_session, get_current_user, is_primary_admin, logout as do_logout, require_role, public_user,
 )
 from admin_login import AdminLoginBody, UserResponse, admin_password_config_ok, login_admin, seed_local_admin
 from excel_utils import build_opname_template, build_workbook, parse_opname_upload
 from pdf_utils import build_pdf_report
-from report_dates import WITA, dicetak_wita, next_day_start_utc, parse_report_date, periode_id, tanggal_id, today_wita
+from report_dates import WITA, dicetak_wita, next_day_start_utc, parse_report_date, periode_id, rentang_id, tanggal_id, today_wita
 from seed_data import CATALOG_VERSION, DESTINATION_CYCLE, EXPECTED_ITEM_COUNT, INCIDENT_TYPES, INITIAL_ITEMS
 from management import router as management_router
 from public_catalog import router as public_catalog_router
@@ -100,6 +100,23 @@ def stock_status(item) -> str:
     if item["currentStock"] <= item["minThreshold"]:
         return "menipis"
     return "aman"
+
+
+FIRST_REALIZED_YEAR = 2026
+
+
+def stock_years(items) -> tuple:
+    """(realised year, plan year). The realised year is the current WITA year, never before 2026. The plan
+    year is the year after it once any item has a plan for that year, otherwise the latest year planned
+    (a year already past is never offered as a plan)."""
+    realized = max(now_utc().astimezone(timezone(timedelta(hours=8))).year, FIRST_REALIZED_YEAR)
+    planned = {y for i in items for y in (i.get("planYear") or {}) if y.isdigit()}
+    following = str(realized + 1)
+    return str(realized), following if following in planned or not planned else max(planned | {str(realized)}, key=int)
+
+
+def plan_quantity(item, year: str):
+    return (item.get("planYear") or {}).get(year, 0)
 
 
 def parse_date(value: Optional[str], end=False) -> datetime:
@@ -252,9 +269,15 @@ class UserPatch(BaseModel):
 
 
 # ---------- public ----------
+HEALTH_DB_TIMEOUT_SECONDS = 3  # below the Dockerfile HEALTHCHECK timeout, so a dead database answers 503
+
+
 @api.get("/health")
 async def health():
-    count = await db.items.count_documents({})
+    try:
+        count = await asyncio.wait_for(db.items.count_documents({}), timeout=HEALTH_DB_TIMEOUT_SECONDS)
+    except (asyncio.TimeoutError, PyMongoError):
+        return JSONResponse(status_code=503, content={"status": "db_unavailable"})
     return {"status": "ok", "items": count, "expected": EXPECTED_ITEM_COUNT,
             "admin_password_config": "ok" if admin_password_config_ok() else "invalid",
             "ai": ai_config()["provider"], "time": now_utc().isoformat()}
@@ -284,14 +307,15 @@ async def auth_logout(request: Request, response: Response):
 
 # ---------- items (staff) ----------
 @api.get("/items")
-async def list_items(year: str = "2026", user=Depends(require_role(*STAFF))):
+async def list_items(year: Optional[str] = None, user=Depends(require_role(*STAFF))):
     items = await db.items.find({}, {"_id": 0}).sort("id", 1).to_list(200)
-    if year == "2027":
+    realized_year, plan_year = stock_years(items)
+    if year == plan_year != realized_year:
         return [
-            {**clean(i), "currentStock": 0, "status": "rencana" if i["planYear"].get("2027", 0) > 0 else "tidak-dianggarkan", "planQuantity": i["planYear"].get("2027", 0)}
+            {**clean(i), "currentStock": 0, "status": "rencana" if plan_quantity(i, plan_year) > 0 else "tidak-dianggarkan", "planQuantity": plan_quantity(i, plan_year)}
             for i in items
         ]
-    return [{**clean(i), "status": stock_status(i), "planQuantity": i["planYear"].get("2026", 0)} for i in items]
+    return [{**clean(i), "status": stock_status(i), "planQuantity": plan_quantity(i, realized_year)} for i in items]
 
 
 @api.get("/meta/incident-types")
@@ -318,15 +342,16 @@ async def patch_item(item_id: str, body: ItemPatch, user=Depends(require_role(RO
 
 # ---------- dashboards ----------
 @api.get("/dashboard/stock")
-async def dashboard_stock(year: str = "2026", user=Depends(require_role(*STAFF))):
+async def dashboard_stock(year: Optional[str] = None, user=Depends(require_role(*STAFF))):
     items = await db.items.find({}, {"_id": 0}).sort("id", 1).to_list(200)
+    realized_year, plan_year = stock_years(items)
 
-    if year == "2027":
+    if year == plan_year != realized_year:
         categories = {}
         rencana = tidak = 0
         rows = []
         for i in items:
-            plan = i["planYear"].get("2027", 0)
+            plan = plan_quantity(i, plan_year)
             st = "rencana" if plan > 0 else "tidak-dianggarkan"
             rencana += st == "rencana"
             tidak += st == "tidak-dianggarkan"
@@ -334,8 +359,10 @@ async def dashboard_stock(year: str = "2026", user=Depends(require_role(*STAFF))
             c["count"] += 1
             rows.append({**clean(i), "currentStock": 0, "status": st, "planQuantity": plan})
         return {
-            "year": "2027",
+            "year": plan_year,
             "realized": False,
+            "realized_year": realized_year,
+            "plan_year": plan_year,
             "total_items": len(items),
             "status_counts": {"rencana": rencana, "tidak-dianggarkan": tidak},
             "categories": sorted(categories.values(), key=lambda c: -c["count"]),
@@ -356,13 +383,15 @@ async def dashboard_stock(year: str = "2026", user=Depends(require_role(*STAFF))
     async for tx in db.transactions.find({**ACTIVE_TX, "created_at": {"$gte": since}}, {"_id": 0, "type": 1}):
         weekly[tx["type"]] = weekly.get(tx["type"], 0) + 1
     return {
-        "year": "2026",
+        "year": realized_year,
         "realized": True,
+        "realized_year": realized_year,
+        "plan_year": plan_year,
         "total_items": len(items),
         "status_counts": {s: sum(1 for i in items if stock_status(i) == s) for s in ("aman", "menipis", "habis")},
         "categories": sorted(categories.values(), key=lambda c: -c["count"]),
         "low_items": low_items,
-        "items": [{**clean(i), "status": stock_status(i), "planQuantity": i["planYear"].get("2026", 0)} for i in items],
+        "items": [{**clean(i), "status": stock_status(i), "planQuantity": plan_quantity(i, realized_year)} for i in items],
         "recent_transactions": clean(recent),
         "weekly_activity": weekly,
     }
@@ -560,7 +589,7 @@ async def export_stock_pdf(date: Optional[str] = None, user=Depends(require_role
 async def export_distribution(start: Optional[str] = None, end: Optional[str] = None, user=Depends(require_role(*STAFF))):
     data = await dashboard_distribution(start, end, user)
     periode = periode_id(date_type.fromisoformat(data["range"]["start"]), date_type.fromisoformat(data["range"]["end"]))
-    meta = [("Periode", f"{data['range']['start']} s/d {data['range']['end']}"), ("Dicetak", now_wita()), ("Oleh", user["name"] or user["email"])]
+    meta = [("Periode", rentang_id(date_type.fromisoformat(data["range"]["start"]), date_type.fromisoformat(data["range"]["end"]))), ("Dicetak", now_wita()), ("Oleh", user["name"] or user["email"])]
     txs = await db.transactions.find({**ACTIVE_TX, "type": "OUT", "occurred_at": {"$gte": parse_date(data["range"]["start"]), "$lt": parse_date(data["range"]["end"], end=True)}}, {"_id": 0}).sort("occurred_at", -1).to_list(5000)
     content = build_workbook([
         {"name": "Per Item", "title": f"Laporan Penyaluran per Item {periode}", "meta": meta,
@@ -580,7 +609,7 @@ async def export_distribution(start: Optional[str] = None, end: Optional[str] = 
 async def export_distribution_pdf(start: Optional[str] = None, end: Optional[str] = None, user=Depends(require_role(*STAFF))):
     data = await dashboard_distribution(start, end, user)
     periode = periode_id(date_type.fromisoformat(data["range"]["start"]), date_type.fromisoformat(data["range"]["end"]))
-    meta = [("Periode", f"{data['range']['start']} s/d {data['range']['end']}"), ("Dicetak", now_wita())]
+    meta = [("Periode", rentang_id(date_type.fromisoformat(data["range"]["start"]), date_type.fromisoformat(data["range"]["end"]))), ("Dicetak", now_wita())]
     txs = await db.transactions.find({**ACTIVE_TX, "type": "OUT", "occurred_at": {"$gte": parse_date(data["range"]["start"]), "$lt": parse_date(data["range"]["end"], end=True)}}, {"_id": 0}).sort("occurred_at", -1).to_list(5000)
     content = build_pdf_report(
         f"LAPORAN PENYALURAN LOGISTIK BENCANA<br/>{periode}",
@@ -605,7 +634,7 @@ async def export_transactions(start: Optional[str] = None, end: Optional[str] = 
              t.get("source") or t.get("destination") or "", t.get("incident_type", ""), t.get("reason", ""), t["user_name"], t.get("notes", "")] for t in txs]
     content = build_workbook([{
         "name": "Riwayat Transaksi", "title": f"Riwayat Transaksi Stok {periode_id(start_dt.date(), (end_dt - timedelta(days=1)).date())}",
-        "meta": [("Periode", f"{start_dt.strftime('%Y-%m-%d')} s/d {(end_dt - timedelta(days=1)).strftime('%Y-%m-%d')}"), ("Dicetak", now_wita()), ("Oleh", user["name"] or user["email"])],
+        "meta": [("Periode", rentang_id(start_dt.date(), (end_dt - timedelta(days=1)).date())), ("Dicetak", now_wita()), ("Oleh", user["name"] or user["email"])],
         "headers": ["Waktu", "Jenis", "Nama Item", "Stok Sebelum", "Stok Sesudah", "Perubahan", "Satuan", "Sumber / Tujuan", "Jenis Kejadian", "Alasan", "Petugas", "Catatan"],
         "rows": rows,
     }])
@@ -622,7 +651,7 @@ async def export_transactions_pdf(start: Optional[str] = None, end: Optional[str
         f"RIWAYAT TRANSAKSI STOK LOGISTIK<br/>{periode_id(start_dt.date(), (end_dt - timedelta(days=1)).date())}",
         [{
             "title": "Rincian Mutasi Stok",
-            "meta": [("Periode", f"{start_dt.strftime('%Y-%m-%d')} s/d {(end_dt - timedelta(days=1)).strftime('%Y-%m-%d')}"), ("Dicetak", now_wita())],
+            "meta": [("Periode", rentang_id(start_dt.date(), (end_dt - timedelta(days=1)).date())), ("Dicetak", now_wita())],
             "headers": ["Waktu", "Jenis", "Nama Item", "Sebelum", "Sesudah", "Perubahan", "Satuan", "Sumber/Tujuan", "Petugas"],
             "rows": rows,
         }],
@@ -692,6 +721,10 @@ async def patch_user(user_id: str, body: UserPatch, user=Depends(require_role(RO
         raise HTTPException(status_code=400, detail="Tidak ada perubahan")
     if user_id == user["user_id"] and (update.get("role", ROLE_ADMIN) != ROLE_ADMIN or update.get("active") is False):
         raise HTTPException(status_code=400, detail="Tidak dapat mengubah peran/status akun sendiri")
+    if update.get("role", ROLE_ADMIN) != ROLE_ADMIN or update.get("active") is False:
+        current = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+        if current and is_primary_admin(current):
+            raise HTTPException(status_code=409, detail="Admin utama dilindungi: peran dan status aktifnya tidak dapat diubah.")
     target = await db.users.find_one_and_update({"user_id": user_id}, {"$set": update}, projection={"_id": 0}, return_document=ReturnDocument.AFTER)
     if not target:
         raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan")
@@ -770,7 +803,7 @@ async def seed_2026_history():
     logger.info("Seeded 2026 realization history")
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 INIT_FINGERPRINT = hashlib.sha256(
     f"{SCHEMA_VERSION}|{CATALOG_VERSION}|{os.environ['ADMIN_USERNAME']}|{os.environ['ADMIN_PASSWORD_HASH']}".encode()
 ).hexdigest()
@@ -789,6 +822,7 @@ async def initialize_database():
     await db.transactions.create_index("transaction_id", unique=True)
     await db.admin_audit.create_index("audit_id", unique=True)
     await db.transactions.create_index([("type", 1), ("occurred_at", -1)])
+    await db.transactions.create_index([("type", 1), ("occurred_at", -1), ("transaction_id", 1)])
     await db.users.create_index("email", unique=True)
     await db.user_sessions.create_index("session_token", unique=True)
     await seed_local_admin(db)

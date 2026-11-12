@@ -20,7 +20,8 @@ export default function ItemTrendModal({ itemId, onClose }) {
   }, [itemId]);
 
   if (!itemId) return null;
-  const points = (data?.points || []).map((p) => ({ ...p, label: fmtDateTime(p.date) }));
+  const points = (data?.points || []).map((p) => ({ ...p, ts: new Date(p.date).getTime() })).filter((p) => !Number.isNaN(p.ts));
+  const fmtTick = (ts) => new Date(ts).toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "2-digit", timeZone: "Asia/Makassar" });
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" data-testid="item-trend-modal" onClick={onClose}>
@@ -37,12 +38,13 @@ export default function ItemTrendModal({ itemId, onClose }) {
         ) : (
           <div className="mt-5 h-64">
             <ResponsiveContainer>
-              <LineChart data={points} margin={{ left: -20, right: 12, top: 8 }}>
-                <XAxis dataKey="label" tick={{ fill: "#64748B", fontSize: 10 }} axisLine={false} tickLine={false} interval="preserveStartEnd" minTickGap={40} />
-                <YAxis allowDecimals={false} tick={{ fill: "#64748B", fontSize: 10 }} axisLine={false} tickLine={false} />
+              <LineChart data={points} margin={{ left: 4, right: 12, top: 8 }}>
+                <XAxis dataKey="ts" type="number" scale="time" domain={["dataMin", "dataMax"]} tickFormatter={fmtTick} tick={{ fill: "#64748B", fontSize: 10 }} axisLine={false} tickLine={false} interval="preserveStartEnd" minTickGap={40} />
+                <YAxis allowDecimals={false} tick={{ fill: "#64748B", fontSize: 10 }} axisLine={false} tickLine={false}
+                  label={{ value: `Stok (${data.unit})`, angle: -90, position: "insideLeft", fill: "#64748B", fontSize: 11, style: { textAnchor: "middle" } }} />
                 <Tooltip contentStyle={{ background: "#FFFFFF", border: "1px solid #CBD5E1", color: "#334155", borderRadius: 8, fontSize: 12 }}
-                  formatter={(v) => [`${fmtNum(v)} ${data.unit}`, "Stok"]} labelFormatter={(l) => l} />
-                <Line type="monotone" dataKey="stock" stroke="#C2410C" strokeWidth={2.5} dot={{ r: 3, fill: "#C2410C" }} isAnimationActive animationDuration={600} />
+                  formatter={(v) => [`${fmtNum(v)} ${data.unit}`, "Stok"]} labelFormatter={(ts) => fmtDateTime(ts)} />
+                <Line type="stepAfter" dataKey="stock" stroke="#C2410C" strokeWidth={2.5} dot={{ r: 3, fill: "#C2410C" }} isAnimationActive animationDuration={600} />
               </LineChart>
             </ResponsiveContainer>
           </div>

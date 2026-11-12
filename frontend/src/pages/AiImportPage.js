@@ -14,7 +14,7 @@ const KINDS = {
 const ACCEPT = ".docx,.xlsx,.pdf,.jpg,.jpeg,.png,.webp";
 const emptyHeader = { destination: "", incident_type: "", date: "", time: "", recipient_kk: "", recipient_jiwa: "", ref: "" };
 let rowKey = 0;
-const newRow = (r = {}) => ({ key: ++rowKey, item_id: r.item_id || "", quantity: r.quantity ?? "", note: r.note || "", source_name: r.source_name || "", source_unit: r.source_unit || "" });
+const newRow = (r = {}) => ({ key: ++rowKey, item_id: r.item_id || "", quantity: r.quantity ?? "", note: r.note || "", source_name: r.source_name || "", source_unit: r.source_unit || "", match: r.match || "" });
 
 function HeaderForm({ kind, header, set, incidents }) {
   const input = (key, label, props = {}) => (
@@ -54,24 +54,25 @@ export default function AiImportPage() {
   const [check, setCheck] = useState(null); // last server validation
   const [dirty, setDirty] = useState(false);
   const [saved, setSaved] = useState(null);
+  const [checked, setChecked] = useState(false); // user confirmed the rows that carry a warning
 
   useEffect(() => {
     api.get("/ai-import/status").then(({ data }) => { setStatus(data); if (!data.kinds.includes("opname") && data.kinds[0]) setKind(data.kinds[0]); }).catch((e) => setError(errorMessage(e)));
     api.get("/meta/incident-types").then(({ data }) => setIncidents(data)).catch(() => {});
   }, []);
 
-  const reset = () => { setDraft(null); setCheck(null); setDirty(false); setError(""); if (fileRef.current) fileRef.current.value = ""; };
+  const reset = () => { setDraft(null); setCheck(null); setDirty(false); setChecked(false); setError(""); if (fileRef.current) fileRef.current.value = ""; };
   const switchKind = (k) => { if (k !== kind) { reset(); setSaved(null); setKind(k); } };
 
   const payload = (d = draft) => ({
     header: Object.fromEntries(Object.entries(d.header).filter(([, v]) => v !== "" && v != null)),
-    rows: d.rows.map(({ item_id, quantity, note, source_name, source_unit }) => ({ item_id, quantity: quantity === "" ? null : quantity, note, source_name, source_unit })),
+    rows: d.rows.map(({ item_id, quantity, note, source_name, source_unit, match }) => ({ item_id, quantity: quantity === "" ? null : quantity, note, source_name, source_unit, match })),
   });
 
   const upload = async (file) => {
     if (!file || busy) return;
     const id = ++pick.current;
-    setBusy("extract"); setError(""); setSaved(null); setDraft(null); setCheck(null);
+    setBusy("extract"); setError(""); setSaved(null); setDraft(null); setCheck(null); setChecked(false);
     const fd = new FormData(); fd.append("file", file);
     try {
       const res = await fetch(`${API}/ai-import/${kind}/extract`, { method: "POST", body: fd, credentials: "include" });
@@ -84,7 +85,7 @@ export default function AiImportPage() {
     } catch (e) { if (id === pick.current) setError(e.message); } finally { if (id === pick.current) { setBusy(""); if (fileRef.current) fileRef.current.value = ""; } }
   };
 
-  const edit = (fn) => { setDraft((d) => fn(d)); setDirty(true); };
+  const edit = (fn) => { setDraft((d) => fn(d)); setDirty(true); setChecked(false); };
   const setHeader = (key, value) => edit((d) => ({ ...d, header: { ...d.header, [key]: value } }));
   const setRow = (key, patch) => edit((d) => ({ ...d, rows: d.rows.map((r) => (r.key === key ? { ...r, ...patch } : r)) }));
 
@@ -105,7 +106,8 @@ export default function AiImportPage() {
 
   const cfg = KINDS[kind];
   const kinds = status?.kinds || [];
-  const canSave = draft && check?.valid && !dirty && busy === "";
+  const flagged = !dirty && (check?.rows || []).some((r) => r.warning);
+  const canSave = draft && check?.valid && !dirty && busy === "" && (!flagged || checked);
 
   return (
     <div data-testid="ai-import-page">
@@ -159,15 +161,15 @@ export default function AiImportPage() {
                   {draft.rows.map((r, i) => {
                     const c = !dirty ? check?.rows?.[i] : null;
                     return (
-                      <tr key={r.key} className={c?.error ? "bg-red-50" : ""} data-testid={`ai-row-${i + 1}`}>
+                      <tr key={r.key} className={c?.error ? "bg-red-50" : c?.warning ? "bg-amber-50" : ""} data-testid={`ai-row-${i + 1}`}>
                         <td className="px-2 py-1.5 align-top num text-slate-500">{i + 1}</td>
                         <td className="px-2 py-1.5 align-top text-slate-600">{r.source_name || "—"}{r.source_unit && <span className="block text-[11px] text-slate-500">{r.source_unit}</span>}</td>
                         <td className="px-2 py-1.5 align-top">
-                          <select className="field !py-1 text-sm" value={r.item_id} onChange={(e) => setRow(r.key, { item_id: e.target.value })} aria-label={`Barang baris ${i + 1}`} data-testid={`ai-row-${i + 1}-item`}>
+                          <select className="field !py-1 text-sm" value={r.item_id} onChange={(e) => setRow(r.key, { item_id: e.target.value, match: "" })} aria-label={`Barang baris ${i + 1}`} data-testid={`ai-row-${i + 1}-item`}>
                             <option value="">— pilih barang —</option>{items.map((it) => <option key={it.id} value={it.id}>{it.name} ({it.unit})</option>)}
                           </select>
                           {c?.error && <div className="mt-1 text-xs text-red-700" data-testid={`ai-row-${i + 1}-error`}>✗ {c.error}</div>}
-                          {c?.warning && <div className="mt-1 text-xs text-amber-700">⚠ {c.warning}</div>}
+                          {c?.warning && <div className="mt-1 text-xs text-amber-700" data-testid={`ai-row-${i + 1}-warning`}>⚠ {c.warning}</div>}
                         </td>
                         <td className="px-2 py-1.5 align-top num text-right text-slate-500">{c?.current_stock == null ? "—" : fmtNum(c.current_stock)}</td>
                         <td className="px-2 py-1.5 align-top"><input type="number" min="0" step="1" className="field !py-1 num w-24 text-right" value={r.quantity} onChange={(e) => setRow(r.key, { quantity: e.target.value })} aria-label={`${cfg.qty} baris ${i + 1}`} data-testid={`ai-row-${i + 1}-qty`} /></td>
@@ -182,6 +184,12 @@ export default function AiImportPage() {
               </table>
             </div>
 
+            {flagged && (
+              <label className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800">
+                <input type="checkbox" className="mt-0.5" checked={checked} onChange={(e) => setChecked(e.target.checked)} data-testid="ai-confirm-warnings" />
+                Saya sudah memeriksa baris yang ditandai
+              </label>
+            )}
             <div className="flex flex-wrap items-center justify-between gap-3">
               <button onClick={() => edit((d) => ({ ...d, rows: [...d.rows, newRow()] }))} className="btn-ghost !py-1.5 text-xs" data-testid="ai-add-row"><Plus size={13} /> Tambah baris</button>
               <div className="flex flex-wrap items-center gap-3">
@@ -190,7 +198,7 @@ export default function AiImportPage() {
                 <button onClick={save} disabled={!canSave} className="btn-primary" data-testid="ai-save">{busy === "save" ? "Menyimpan…" : `Simpan ${draft.rows.length} baris`}</button>
               </div>
             </div>
-            <p className="text-xs text-slate-500">Simpan hanya aktif bila semua baris benar dan sudah diperiksa. Semua baris tersimpan sekaligus, atau tidak sama sekali.</p>
+            <p className="text-xs text-slate-500">Simpan hanya aktif bila semua baris benar dan sudah diperiksa. Baris yang ditandai ⚠ harus Anda periksa dan centang dulu. Semua baris tersimpan sekaligus, atau tidak sama sekali.</p>
           </div>
         )}
       </Panel>

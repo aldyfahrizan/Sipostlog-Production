@@ -9,7 +9,9 @@ import { fmtDateTime, fmtNum, fmtShortDay, todayYMD } from "../lib/format";
 import { CancelTransactionButton } from "../components/AdminDeleteControls";
 import { useAuth } from "../context/AuthContext";
 
-const PALETTE = ["#F59E0B", "#38BDF8", "#34D399", "#F472B6", "#A78BFA", "#FB923C"];
+// Warna tetap per jenis kejadian, supaya tidak berubah mengikuti urutan.
+const INCIDENT_COLORS = { "Banjir": "#2563EB", "Kebakaran": "#DC2626", "Tanah Longsor": "#92400E", "Angin Kencang": "#0D9488", "Kekeringan": "#CA8A04", "Lainnya": "#64748B" };
+const incidentColor = (name) => INCIDENT_COLORS[name] || INCIDENT_COLORS.Lainnya;
 const TT = { background: "#0F172A", border: "1px solid #334155", borderRadius: 8, fontSize: 12 };
 
 export default function DistributionDashboard() {
@@ -68,10 +70,10 @@ export default function DistributionDashboard() {
                 <div className="flex flex-wrap items-center gap-4">
                   <div className="h-44 w-44 shrink-0">
                     <ResponsiveContainer><PieChart><Pie data={data.per_incident} dataKey="count" nameKey="incident_type" innerRadius={48} outerRadius={70} paddingAngle={3} stroke="none">
-                      {data.per_incident.map((_, i) => <Cell key={i} fill={PALETTE[i % PALETTE.length]} />)}</Pie><Tooltip contentStyle={TT} /></PieChart></ResponsiveContainer>
+                      {data.per_incident.map((p) => <Cell key={p.incident_type} fill={incidentColor(p.incident_type)} />)}</Pie><Tooltip contentStyle={TT} /></PieChart></ResponsiveContainer>
                   </div>
                   <ul className="space-y-2 text-sm flex-1">
-                    {data.per_incident.map((p, i) => <li key={p.incident_type} className="flex items-center justify-between gap-2"><span className="flex items-center gap-2 text-slate-300"><span className="h-2.5 w-2.5 rounded-sm" style={{ background: PALETTE[i % PALETTE.length] }} />{p.incident_type}</span><span className="num font-bold text-white">{p.count}</span></li>)}
+                    {data.per_incident.map((p) => <li key={p.incident_type} className="flex items-center justify-between gap-2"><span className="flex items-center gap-2 text-slate-300"><span className="h-2.5 w-2.5 rounded-sm" style={{ background: incidentColor(p.incident_type) }} />{p.incident_type}</span><span className="num font-bold text-white">{p.count}</span></li>)}
                   </ul>
                 </div>
               )}
