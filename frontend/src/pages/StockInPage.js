@@ -1,9 +1,10 @@
 import { Link } from "react-router-dom";
 import { useState } from "react";
-import { ArrowDownToLine, FileSpreadsheet } from "lucide-react";
+import { ArrowDownToLine, FileSpreadsheet, ScanText } from "lucide-react";
 import { toast } from "sonner";
 import { api, errorMessage } from "../lib/api";
 import { PageHeader, Panel } from "../components/StatCard";
+import AiImportPanel from "../components/AiImportPanel";
 import { Field, ItemPreview, ItemSelect, ResultCard, useItems } from "../components/FormBits";
 import { todayYMD } from "../lib/format";
 
@@ -29,7 +30,7 @@ export default function StockInPage() {
 
   return (
     <div data-testid="stock-in-page">
-      <PageHeader eyebrow="Transaksi" title="Catat Barang Masuk" description="Penerimaan logistik baru dari pengadaan, bantuan, hibah, atau pengembalian. Stok bertambah dan tercatat dalam riwayat." actions={<Link to="/app/excel#impor-in" className="btn-ghost" data-testid="bulk-in-shortcut"><FileSpreadsheet size={14} /> Impor dari Excel</Link>} />
+      <PageHeader eyebrow="Transaksi" title="Catat Barang Masuk" description="Penerimaan logistik baru dari pengadaan, bantuan, hibah, atau pengembalian. Stok bertambah dan tercatat dalam riwayat." actions={<><button type="button" onClick={() => { document.getElementById("impor-ai")?.scrollIntoView({ behavior: "smooth" }); document.getElementById("ai-text-in")?.focus({ preventScroll: true }); }} className="btn-ghost" data-testid="ai-in-shortcut"><ScanText size={14} /> Dari WhatsApp / dokumen</button><Link to="/app/excel#impor-in" className="btn-ghost" data-testid="bulk-in-shortcut"><FileSpreadsheet size={14} /> Impor dari Excel</Link></>} />
       <div className="grid gap-6 lg:grid-cols-[1.2fr_1fr]">
         <Panel testId="stock-in-form-panel">
           <form onSubmit={submit} className="space-y-5">
@@ -45,6 +46,7 @@ export default function StockInPage() {
         </Panel>
         <div className="space-y-4"><ItemPreview item={item} /><ResultCard tx={result} onReset={() => setResult(null)} /></div>
       </div>
+      <div className="mt-8"><AiImportPanel kind="in" anchor="impor-ai" title="Impor dari WhatsApp, dokumen, atau ketikan (AI)" /></div>
     </div>
   );
 }

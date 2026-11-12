@@ -336,3 +336,77 @@ def test_rate_limited_user_refused_before_parser_runs(client, monkeypatch):
     monkeypatch.setattr(ai_import, "read_document", lambda *a: pytest.fail("parser dijalankan"))
     r = client.post("/api/ai-import/out/extract", headers=h(), files={"file": ("bast.docx", docx_bytes(["BAST", "Beras 300 KG"]))})
     assert r.status_code == 429 and "Batas" in r.json()["detail"]
+
+
+# ---------- goods received, pasted text, .txt ----------
+IN_HEADER = {"source": "Bantuan BNPB", "date": "2026-11-05", "ref": "BAST-77"}
+WA = "[05/11 09.12] Pak Udin: Lapor, tadi masuk gudang bantuan BNPB: beras 200 kg, selimut 15 lembar. Trims"
+
+
+def test_in_pasted_whatsapp_text_preview_and_commit(client, monkeypatch):
+    seen = fake_ai(monkeypatch, {"header": IN_HEADER, "rows": [
+        {"item_id": "beras", "name": "beras", "quantity": 200, "unit": "kg"},
+        {"item_id": "selimut", "name": "selimut", "quantity": 15, "unit": "lembar"},
+    ]})
+    r = client.post("/api/ai-import/in/extract", headers=h(), data={"text": WA})
+    assert r.status_code == 200, r.text
+    p = r.json()
+    assert seen["kind"] == "in" and seen["text"] == WA and seen["images"] == []
+    assert p["filename"] == ai_import.PASTED_NAME and p["read_as"] == "teks" and p["valid"] is True
+    assert p["rows"][0]["after"] == 1200 and "Satuan" in p["rows"][1]["warning"]
+    assert stock(client, "beras") == 1000  # nothing written yet
+
+    rows = [{"item_id": "beras", "quantity": 200, "note": ""}, {"item_id": "selimut", "quantity": 15, "note": ""}]
+    c = client.post("/api/ai-import/in/commit", headers=h(), json={"header": IN_HEADER, "rows": rows, "snapshot": p["snapshot"], "filename": p["filename"]})
+    assert c.status_code == 201, c.text
+    saved = c.json()
+    assert saved["count"] == 2 and stock(client, "beras") == 1200 and stock(client, "selimut") == 55
+    tx = client.get("/api/transactions", headers=h(), params={"batch_id": saved["batch_id"]}).json()
+    assert all(t["type"] == "IN" and t["source"] == "Bantuan BNPB" and t["batch_source"] == "ai" for t in tx)
+
+
+def test_in_needs_source_and_is_closed_to_opname_role(client):
+    rows = [{"item_id": "beras", "quantity": 5}]
+    v = client.post("/api/ai-import/in/validate", headers=h(), json={"header": {"date": "2026-11-05"}, "rows": rows}).json()
+    assert v["valid"] is False and any("Sumber" in e for e in v["header_errors"])
+    assert client.post("/api/ai-import/in/validate", headers=h("opname"), json={"header": IN_HEADER, "rows": rows}).status_code == 403
+    assert "in" in client.get("/api/ai-import/status", headers=h()).json()["kinds"]
+    assert "in" not in client.get("/api/ai-import/status", headers=h("opname")).json()["kinds"]
+
+
+def test_extract_needs_text_or_file_and_caps_pasted_text(client, monkeypatch):
+    seen = fake_ai(monkeypatch, {"header": {}, "rows": []})
+    for data in ({}, {"text": "  halo  "}):
+        r = client.post("/api/ai-import/out/extract", headers=h(), data=data)
+        assert r.status_code == 400 and "tempel" in r.json()["detail"]
+    r = client.post("/api/ai-import/out/extract", headers=h(), data={"text": "x" * (ai_import.MAX_PASTED_CHARS + 1)})
+    assert r.status_code == 400 and "terlalu panjang" in r.json()["detail"]
+    assert seen == {}  # the AI was never called
+    crlf = "beras 5 kg\r\n" * 3500  # browsers send line breaks as CRLF; they count once
+    p = client.post("/api/ai-import/out/extract", headers=h(), data={"text": crlf})
+    assert p.status_code == 200 and p.json()["truncated"] is False and "\r" not in seen["text"]
+
+
+def test_long_chat_export_keeps_the_newest_messages(client, monkeypatch):
+    seen = fake_ai(monkeypatch, {"header": {}, "rows": []})
+    chat = "".join(f"[01/11 08.{i % 60:02d}] lama {i}\n" for i in range(4000)) + "[05/11 09.12] Lapor: beras 200 kg\n"
+    r = client.post("/api/ai-import/in/extract", headers=h(), files={"file": ("chat.txt", chat.encode())})
+    assert r.status_code == 200 and r.json()["truncated"] is True and r.json()["kept"] == "akhir"
+    assert seen["text"].endswith("beras 200 kg\n") and seen["text"].startswith("[01/11") and len(seen["text"]) <= ai_import.MAX_TEXT_CHARS
+
+
+def test_oversized_request_body_is_refused_before_parsing(client):
+    r = client.post("/api/ai-import/in/extract", headers={**h(), "Content-Length": str(13 * 1024 * 1024)}, data={"text": "beras 5 kg sekian"})
+    assert r.status_code == 413
+
+
+def test_txt_whatsapp_export_is_read_as_text(client, monkeypatch):
+    seen = fake_ai(monkeypatch, {"header": {}, "rows": [{"item_id": "mie", "name": "Mi Instan", "quantity": 10}]})
+    r = client.post("/api/ai-import/out/extract", headers=h(), files={"file": ("Chat WhatsApp.txt", ("\ufeff" + WA).encode())})
+    assert r.status_code == 200, r.text
+    assert seen["text"] == WA and r.json()["filename"] == "Chat WhatsApp.txt"
+
+
+def test_prompt_for_goods_received_names_sources_and_today():
+    system = ai_import.build_messages("in", [{"id": "beras", "name": "Beras", "unit": "KG"}], "beras 5", [])[0]["content"]
+    assert "BARANG MASUK" in system and "Bantuan BNPB" in system and "WhatsApp" in system and "Hari ini" in system

@@ -136,11 +136,11 @@ SECTIONS = [
         "title": "Input dari Dokumen (AI)",
         "roles": ALL,
         "paragraphs": [
-            "Menu ini membaca dokumen Word, Excel, PDF, hasil scan, atau foto dengan bantuan AI, lalu mengisi daftar barang secara otomatis. Tersedia untuk Stock Opname (semua petugas) dan Penyaluran (admin dan petugas gudang).",
+            "Menu ini membaca pesan WhatsApp, laporan ketikan, tangkapan layar, foto, PDF, Word, atau Excel dengan bantuan AI, lalu mengisi daftar barang secara otomatis. Tersedia untuk Stock Opname (semua petugas) serta Barang Masuk dan Penyaluran (admin dan petugas gudang). Bagian yang sama juga ada di bawah formulir Catat Barang Masuk dan Catat Penyaluran.",
         ],
         "steps": [
-            "Buka menu Input dari Dokumen (AI), pilih tab Stock Opname atau Penyaluran.",
-            "Unggah dokumen (maks. 8 MB). Tunggu sampai AI selesai membaca.",
+            "Buka menu Input dari Dokumen (AI) lalu pilih tab Stock Opname, Barang Masuk, atau Penyaluran; atau gulir ke bagian 'Impor dari WhatsApp, dokumen, atau ketikan (AI)' di halaman Catat Barang Masuk / Catat Penyaluran.",
+            "Tempel pesan WhatsApp atau ketik laporannya lalu klik Baca dengan AI; atau unggah berkas (maks. 8 MB); atau tempel tangkapan layar dengan Ctrl+V. Tunggu sampai AI selesai membaca.",
             "Cocokkan setiap baris dengan dokumen asli: nama barang, jumlah, dan kepala dokumen. Perbaiki bila ada yang salah; baris berwarna merah wajib diperbaiki atau dihapus.",
             "Klik Periksa setelah mengubah data, lalu klik Simpan. Catat nomor batch pada dokumen fisik.",
         ],

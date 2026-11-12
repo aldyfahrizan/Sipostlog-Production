@@ -1,9 +1,10 @@
 import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { Truck, FileSpreadsheet } from "lucide-react";
+import { Truck, FileSpreadsheet, ScanText } from "lucide-react";
 import { toast } from "sonner";
 import { api, errorMessage } from "../lib/api";
 import { PageHeader, Panel } from "../components/StatCard";
+import AiImportPanel from "../components/AiImportPanel";
 import { Field, ItemPreview, ItemSelect, ResultCard, useItems } from "../components/FormBits";
 import { witaDateTime } from "../lib/format";
 import { RecipientFields } from "../components/RecipientFields";
@@ -37,7 +38,7 @@ export default function DistributionPage() {
 
   return (
     <div data-testid="distribution-page">
-      <PageHeader eyebrow="Transaksi" title="Catat Penyaluran" description="Distribusi logistik ke posko atau wilayah terdampak. Server menolak otomatis jika jumlah melebihi stok tersedia." actions={<Link to="/app/excel#impor-out" className="btn-ghost" data-testid="bulk-out-shortcut"><FileSpreadsheet size={14} /> Impor dari Excel</Link>} />
+      <PageHeader eyebrow="Transaksi" title="Catat Penyaluran" description="Distribusi logistik ke posko atau wilayah terdampak. Server menolak otomatis jika jumlah melebihi stok tersedia." actions={<><button type="button" onClick={() => { document.getElementById("impor-ai")?.scrollIntoView({ behavior: "smooth" }); document.getElementById("ai-text-out")?.focus({ preventScroll: true }); }} className="btn-ghost" data-testid="ai-out-shortcut"><ScanText size={14} /> Dari WhatsApp / dokumen</button><Link to="/app/excel#impor-out" className="btn-ghost" data-testid="bulk-out-shortcut"><FileSpreadsheet size={14} /> Impor dari Excel</Link></>} />
       <div className="grid gap-6 lg:grid-cols-[1.2fr_1fr]">
         <Panel testId="distribution-form-panel">
           <form onSubmit={submit} className="space-y-5">
@@ -63,6 +64,7 @@ export default function DistributionPage() {
         </Panel>
         <div className="space-y-4"><ItemPreview item={item} /><ResultCard tx={result} onReset={() => setResult(null)} /></div>
       </div>
+      <div className="mt-8"><AiImportPanel kind="out" anchor="impor-ai" title="Impor dari WhatsApp, dokumen, atau ketikan (AI)" /></div>
     </div>
   );
 }
