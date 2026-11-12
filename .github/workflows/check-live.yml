@@ -5,9 +5,17 @@ name: Cek Aplikasi Live
 
 on:
   workflow_dispatch:
+    inputs:
+      cek_bocoran:
+        description: Uji apakah kredensial uji lama yang pernah ter-commit di repo masih berlaku (jalankan sesekali saja)
+        type: boolean
+        default: false
 
 env:
   APP_URL: http://x43jcxgopn0ec7h5acs71bbw.103.127.96.32.sslip.io
+
+permissions:
+  contents: read
 
 jobs:
   check:
@@ -48,3 +56,41 @@ jobs:
             code=$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "http://103.127.96.32:8000$path" || true)
             echo "GET $path -> HTTP $code"
           done
+
+      # Kredensial di bawah ini pernah ter-commit di repo publik (memory/test_credentials.md), jadi bukan
+      # rahasia lagi. Yang diuji: server HARUS menolaknya. Isi jawaban tidak pernah dicetak.
+      - name: Password lama di repo harus ditolak
+        if: ${{ inputs.cek_bocoran }}
+        run: |
+          code=$(curl -sS -m 20 -o /dev/null -w '%{http_code}' -X POST "$APP_URL/api/auth/login" \
+            -H 'Content-Type: application/json' -H "Origin: $APP_URL" \
+            -d '{"username":"admin","password":"admin"}' || true)
+          echo "HTTP $code"
+          case "$code" in
+            401) echo "AMAN: password lama ditolak";;
+            200) echo "::error::BAHAYA: password lama yang tertulis di repo publik MASIH BERLAKU. Ganti password admin sekarang."; exit 1;;
+            429) echo "::warning::Login sedang dibatasi karena terlalu banyak percobaan; ulangi 15 menit lagi";;
+            *) echo "::warning::Jawaban tidak terduga (HTTP $code)";;
+          esac
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: ${{ inputs.cek_bocoran }}
+        with:
+          persist-credentials: false
+
+      - name: Token sesi uji lama di repo harus ditolak
+        if: ${{ inputs.cek_bocoran }}
+        run: |
+          file=memory/test_credentials.md
+          [ -f "$file" ] || { echo "Berkas $file sudah tidak ada di repo; tidak ada yang diuji."; exit 0; }
+          n=0; bad=0
+          for token in $(grep -oE '`[A-Za-z0-9_-]{16,}`' "$file" | tr -d '`' | sort -u); do
+            n=$((n+1))
+            code=$(curl -sS -m 20 -o /dev/null -w '%{http_code}' "$APP_URL/api/auth/me" -H "Authorization: Bearer $token" || true)
+            echo "token ke-$n: HTTP $code"
+            [ "$code" = "200" ] && bad=$((bad+1))
+          done
+          if [ "$bad" -gt 0 ]; then
+            echo "::error::BAHAYA: $bad token sesi uji dari repo publik MASIH BERLAKU di server."; exit 1
+          fi
+          echo "AMAN: $n token diuji, tidak ada yang berlaku"

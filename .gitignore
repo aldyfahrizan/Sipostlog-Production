@@ -20,3 +20,6 @@ frontend/build/
 build/
 __pycache__/
 *.py[cod]
+
+# Salinan kerja sementara milik agen (git worktree), bukan bagian dari proyek
+.claude/worktrees/
