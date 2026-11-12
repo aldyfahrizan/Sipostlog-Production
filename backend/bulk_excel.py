@@ -1,4 +1,5 @@
 """Excel templates and parsing for bulk Barang Masuk / Penyaluran imports (one file = one BAST)."""
+import re
 from datetime import date, datetime, time
 from io import BytesIO
 
@@ -72,6 +73,8 @@ def build_bulk_template(kind: str, items: list, printed_by: str, incident_types:
     if incident_row:
         dv = DataValidation(type="list", formula1='"' + ",".join(incident_types) + '"', allow_blank=False)
         dv.error = "Pilih jenis kejadian dari daftar."
+        dv.errorTitle = "Jenis Kejadian"
+        dv.showErrorMessage = True
         ws.add_data_validation(dv)
         dv.add(f"B{incident_row}")
     ws.append([])
@@ -118,6 +121,10 @@ def parse_bulk_upload(kind: str, content: bytes) -> dict:
     if header_row is None:
         raise ValueError("Header tabel 'ID Item' tidak ditemukan. Gunakan template dari aplikasi.")
     qty_col = cols.get(_norm(spec["qty_header"]))
+    other_kind = qty_col is None and _norm(KINDS["out" if kind == "in" else "in"]["qty_header"]) in cols
+    missing = [label for key, label, required in spec["fields"] if required and key not in header]
+    if missing and not other_kind:
+        raise ValueError("Baris isian tidak ditemukan di berkas: " + ", ".join(missing) + ". Gunakan template dari aplikasi dan jangan ubah tulisan di kolom A.")
     if qty_col is None:
         other = KINDS["out" if kind == "in" else "in"]["qty_header"]
         if _norm(other) in cols:
@@ -163,7 +170,11 @@ def to_time(value) -> str:
         value = value.time()
     if isinstance(value, time):
         return value.strftime("%H:%M")
+    if isinstance(value, (int, float)):
+        raise ValueError(f"Jam tertulis sebagai angka ({value}), bukan jam. Ketik sebagai teks dengan format HH:MM, mis. 14:30.")
     text = str(value or "").strip().replace(".", ":")
+    if not re.fullmatch(r"\d{1,2}:\d{2}", text):
+        raise ValueError("Jam tidak valid. Gunakan format HH:MM, mis. 14:30.")
     try:
         return datetime.strptime(text, "%H:%M").strftime("%H:%M")
     except ValueError:

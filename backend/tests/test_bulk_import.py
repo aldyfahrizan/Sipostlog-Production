@@ -78,8 +78,10 @@ def template(c, kind, header: dict, quantities: dict, notes: dict | None = None,
     return buf.getvalue()
 
 
-IN_HEADER = {"Sumber": "BNPB", "Tanggal (DD/MM/YYYY)": "05/11/2026", "No. BAST/Dokumen": "BAST-01"}
-OUT_HEADER = {"Lokasi Tujuan": "Desa Sungai Tabuk", "Jenis Kejadian": "Banjir", "Tanggal (DD/MM/YYYY)": "05/11/2026",
+WITA_TODAY = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8))).date()
+RECENT = (WITA_TODAY - timedelta(days=7)).strftime("%d/%m/%Y")
+IN_HEADER = {"Sumber": "BNPB", "Tanggal (DD/MM/YYYY)": RECENT, "No. BAST/Dokumen": "BAST-01"}
+OUT_HEADER = {"Lokasi Tujuan": "Desa Sungai Tabuk", "Jenis Kejadian": "Banjir", "Tanggal (DD/MM/YYYY)": RECENT,
               "Jam (HH:MM, WITA)": "14:30", "Jumlah KK": 45, "Jumlah Jiwa": 160, "No. BAST/Dokumen": "012/BAST"}
 
 
@@ -193,3 +195,54 @@ def test_public_distribution_groups_batch_and_counts_kk_once(client):
     assert summary[0] == {"incident_type": "Banjir", "events": 1, "locations": 1}
     assert all(s["events"] == 0 for s in summary[1:])
     assert set(events[0]) == {"event_id", "occurred_at", "location", "item_names", "incident_type", "recipient_kk", "recipient_jiwa"}
+
+
+def test_numeric_time_cell_is_rejected_not_misread(client):
+    for number in (14.3, 14, 0.6):
+        data = preview(client, "out", template(client, "out", {**OUT_HEADER, "Jam (HH:MM, WITA)": number}, {"beras": 1})).json()
+        assert data["valid"] is False and data["header"]["time"] is None
+        assert any("Jam" in e and "angka" in e for e in data["header_errors"]), data["header_errors"]
+    for text, expected in (("14.30", "14:30"), ("7:05", "07:05")):
+        data = preview(client, "out", template(client, "out", {**OUT_HEADER, "Jam (HH:MM, WITA)": text}, {"beras": 1})).json()
+        assert data["valid"] is True and data["header"]["time"] == expected, data["header_errors"]
+    data = preview(client, "out", template(client, "out", {**OUT_HEADER, "Jam (HH:MM, WITA)": "14:3"}, {"beras": 1})).json()
+    assert data["valid"] is False
+
+
+@pytest.mark.parametrize("kind,base", [("in", IN_HEADER), ("out", OUT_HEADER)])
+def test_future_and_very_old_dates_are_rejected(client, kind, base):
+    for day in (WITA_TODAY + timedelta(days=1), WITA_TODAY - timedelta(days=731)):
+        header = {**base, "Tanggal (DD/MM/YYYY)": day.strftime("%d/%m/%Y")}
+        data = preview(client, kind, template(client, kind, header, {"beras": 1})).json()
+        assert data["valid"] is False
+        assert any(e.startswith("Tanggal tidak masuk akal: " + day.strftime("%d/%m/%Y")) for e in data["header_errors"]), data["header_errors"]
+    for day in (WITA_TODAY - timedelta(days=1), WITA_TODAY - timedelta(days=729)):
+        header = {**base, "Tanggal (DD/MM/YYYY)": day.strftime("%d/%m/%Y")}
+        data = preview(client, kind, template(client, kind, header, {"beras": 1})).json()
+        assert data["valid"] is True, data["header_errors"]
+
+
+def test_template_dropdown_shows_error_message(client):
+    r = client.get("/api/excel/template/out", headers=auth())
+    ws = load_workbook(io.BytesIO(r.content)).active
+    validations = ws.data_validations.dataValidation
+    assert validations and all(dv.showErrorMessage for dv in validations)
+
+
+def test_missing_required_header_label_is_reported(client):
+    r = client.get("/api/excel/template/out", headers=auth())
+    wb = load_workbook(io.BytesIO(r.content))
+    ws = wb.active
+    for row in ws.iter_rows():
+        label = str(row[0].value or "").rstrip(" *")
+        if label in OUT_HEADER:
+            row[1].value = OUT_HEADER[label]
+        if label == "Jam (HH:MM, WITA)":
+            row[0].value = "Waktu"
+        if row[0].value == "beras":
+            row[5].value = 1
+    buf = io.BytesIO()
+    wb.save(buf)
+    resp = preview(client, "out", buf.getvalue())
+    assert resp.status_code == 400
+    assert "Jam (HH:MM, WITA)" in resp.json()["detail"] and "tidak ditemukan" in resp.json()["detail"]
