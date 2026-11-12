@@ -40,3 +40,11 @@ jobs:
             404) echo "::warning::Fitur impor massal BELUM ter-deploy (server masih versi lama)";;
             *) echo "::warning::Status tidak terduga (HTTP $code)";;
           esac
+
+      - name: Panel Coolify (tanpa login)
+        if: always()
+        run: |
+          for path in /api/health /api/v1/health /login; do
+            code=$(curl -sS -m 15 -o /dev/null -w '%{http_code}' "http://103.127.96.32:8000$path" || true)
+            echo "GET $path -> HTTP $code"
+          done

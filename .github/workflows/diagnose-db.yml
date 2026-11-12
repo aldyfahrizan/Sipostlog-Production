@@ -16,10 +16,14 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Samarkan port di log
-        run: echo "::add-mask::${{ inputs.port }}"
       - run: pip install -q pymongo==4.6.3
       - name: Periksa port MongoDB
-        run: python .github/scripts/diagnose_mongo.py 103.127.96.32 "${{ inputs.port }}"
+        # Port dibaca dari berkas event, bukan lewat ekspresi: ekspresi yang sudah diisi
+        # tercetak di kepala langkah sebelum masker aktif.
+        run: |
+          PORT=$(jq -r '.inputs.port // empty' "$GITHUB_EVENT_PATH")
+          case "$PORT" in ''|*[!0-9]*) echo "::error::Port harus angka"; exit 1;; esac
+          echo "::add-mask::$PORT"
+          python .github/scripts/diagnose_mongo.py 103.127.96.32 "$PORT"
       - name: Pembanding - aplikasi yang sedang berjalan
         run: curl -sS -m 20 http://x43jcxgopn0ec7h5acs71bbw.103.127.96.32.sslip.io/api/health; echo
