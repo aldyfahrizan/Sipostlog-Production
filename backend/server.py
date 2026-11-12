@@ -776,7 +776,7 @@ async def seed_2026_history():
     logger.info("Seeded 2026 realization history")
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 INIT_FINGERPRINT = hashlib.sha256(
     f"{SCHEMA_VERSION}|{CATALOG_VERSION}|{os.environ['ADMIN_USERNAME']}|{os.environ['ADMIN_PASSWORD_HASH']}".encode()
 ).hexdigest()
@@ -795,6 +795,7 @@ async def initialize_database():
     await db.transactions.create_index("transaction_id", unique=True)
     await db.admin_audit.create_index("audit_id", unique=True)
     await db.transactions.create_index([("type", 1), ("occurred_at", -1)])
+    await db.transactions.create_index([("type", 1), ("occurred_at", -1), ("transaction_id", 1)])
     await db.users.create_index("email", unique=True)
     await db.user_sessions.create_index("session_token", unique=True)
     await seed_local_admin(db)

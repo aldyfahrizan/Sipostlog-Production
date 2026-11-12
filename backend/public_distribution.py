@@ -5,9 +5,11 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
 from distribution_utils import WITA
+from public_cache import cached
 from seed_data import INCIDENT_TYPES
 
 router = APIRouter(prefix="/api/public")
+MAX_ROWS = 5000  # hard cap on transaction rows read per request
 
 
 class PublicDistributionEvent(BaseModel):
@@ -40,6 +42,11 @@ async def public_distribution(request: Request, response: Response, days: int = 
     if days not in (7, 14, 30):
         raise HTTPException(422, "Pilih rentang 7, 14, atau 30 hari.")
     response.headers["Cache-Control"] = "no-store"
+    db = request.app.state.db
+    return await cached(db, ("distribution", days), lambda: _load_distribution(db, days))
+
+
+async def _load_distribution(db, days):
     now = datetime.now(timezone.utc)
     local_today = now.astimezone(WITA).replace(hour=0, minute=0, second=0, microsecond=0)
     start = local_today - timedelta(days=days - 1)
@@ -47,7 +54,7 @@ async def public_distribution(request: Request, response: Response, days: int = 
     projection = {"_id": 0, "transaction_id": 1, "occurred_at": 1, "destination": 1,
                   "item_name": 1, "recipient_kk": 1, "recipient_jiwa": 1, "batch_id": 1, "incident_type": 1}
     events, by_batch = [], {}
-    async for doc in request.app.state.db.transactions.find(query, projection).sort([("occurred_at", -1), ("transaction_id", 1)]):
+    async for doc in db.transactions.find(query, projection).sort([("occurred_at", -1), ("transaction_id", 1)]).limit(MAX_ROWS):
         batch_id = doc.get("batch_id")
         if batch_id and batch_id in by_batch:
             # One imported BAST = one event; KK/jiwa belong to the batch and are counted once.
