@@ -14,6 +14,7 @@ import os
 import re
 import time
 import uuid
+import zipfile
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 
@@ -30,6 +31,8 @@ logger = logging.getLogger("sipostlog")
 STAFF = (ROLE_ADMIN, ROLE_PETUGAS, ROLE_OPNAME)
 
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+MAX_UNZIPPED_BYTES = 50 * 1024 * 1024
+MAX_ZIP_MEMBERS = 2_000
 MAX_DOCS = 20
 MAX_DOC_CHARS = 400_000
 CHUNK_CHARS = 1_200
@@ -49,8 +52,21 @@ SYSTEM_PROMPT = (
 
 
 # ---------- document text ----------
+class FileTooBig(ValueError):
+    """The upload would use too much memory once opened; the message is shown to the user."""
+
+
+def check_zip_size(content: bytes) -> None:
+    """Refuse a .docx/.xlsx (zip) that unpacks to too much data, before any parser reads it."""
+    with zipfile.ZipFile(BytesIO(content)) as z:
+        members = z.infolist()
+    if len(members) > MAX_ZIP_MEMBERS or sum(m.file_size for m in members) > MAX_UNZIPPED_BYTES:
+        raise FileTooBig("Berkas terlalu besar setelah dibuka. Kecilkan berkas lalu unggah ulang.")
+
+
 def docx_to_text(content: bytes) -> str:
     """Paragraphs and table rows of a .docx, in reading order, as plain text."""
+    check_zip_size(content)
     doc = Document(BytesIO(content))
     lines = []
     body = doc.element.body
@@ -305,13 +321,15 @@ async def upload_document(request: Request, file: UploadFile = File(...), user=D
     db = request.app.state.db
     if not (file.filename or "").lower().endswith(".docx"):
         raise HTTPException(400, "Hanya berkas Word (.docx) yang dapat diunggah. Simpan ulang berkas .doc sebagai .docx.")
-    content = await file.read()
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(400, "Ukuran berkas melebihi 5 MB.")
     if await db.knowledge_docs.count_documents({}) >= MAX_DOCS:
         raise HTTPException(400, f"Maksimal {MAX_DOCS} dokumen. Hapus dokumen lama terlebih dahulu.")
     try:
         text = docx_to_text(content)
+    except FileTooBig as e:
+        raise HTTPException(400, str(e))
     except Exception:
         raise HTTPException(400, "Berkas Word tidak dapat dibaca.")
     if len(text) < 20:

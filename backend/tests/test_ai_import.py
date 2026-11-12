@@ -212,3 +212,83 @@ def test_roles_and_formats(client, monkeypatch):
     assert bad.status_code == 400 and "Format tidak didukung" in bad.json()["detail"]
     status = client.get("/api/ai-import/status", headers=h("opname")).json()
     assert status["kinds"] == ["opname"] and status["ai_enabled"] is True
+
+
+# ---------- upload size caps ----------
+def zip_with(base: bytes, extra: dict) -> bytes:
+    import zipfile
+    buf = io.BytesIO(base)
+    with zipfile.ZipFile(buf, "a", zipfile.ZIP_DEFLATED) as z:
+        for name, data in extra.items():
+            z.writestr(name, data)
+    return buf.getvalue()
+
+
+def test_zip_bomb_docx_and_xlsx_rejected_before_parsing(client, monkeypatch):
+    bomb = zip_with(docx_bytes(["BAST", "Beras 300 KG"]), {"word/media/besar.bin": b"\0" * (51 * 1024 * 1024)})
+    assert len(bomb) < 1024 * 1024
+    with pytest.raises(ValueError, match="terlalu besar setelah dibuka"):
+        ai_import.read_document("bom.docx", bomb)
+
+    wb = Workbook()
+    wb.active.append(["Selimut", 20])
+    buf = io.BytesIO()
+    wb.save(buf)
+    many = zip_with(buf.getvalue(), {f"xl/kosong{i}.xml": b"" for i in range(2001)})
+    monkeypatch.setattr(ai_import, "load_workbook", lambda *a, **k: pytest.fail("parser dijalankan"))
+    with pytest.raises(ValueError, match="terlalu besar setelah dibuka"):
+        ai_import.read_document("bom.xlsx", many)
+
+    r = client.post("/api/ai-import/out/extract", headers=h(), files={"file": ("bom.docx", bomb)})
+    assert r.status_code == 400
+    assert r.json()["detail"] == "Berkas terlalu besar setelah dibuka. Kecilkan berkas lalu unggah ulang."
+
+
+def test_image_declaring_60_megapixels_rejected_before_decoding(monkeypatch):
+    import struct
+    import zlib
+    from PIL import Image
+    small = io.BytesIO()
+    Image.new("RGB", (8, 8), "white").save(small, format="PNG")
+    png = bytearray(small.getvalue())
+    ihdr = b"IHDR" + struct.pack(">II", 10000, 6000) + bytes(png[24:29])
+    png[12:33] = ihdr + struct.pack(">I", zlib.crc32(ihdr))
+    monkeypatch.setattr(ai_import, "_jpeg_data_url", lambda image: pytest.fail("gambar di-decode"))
+    with pytest.raises(ValueError, match="Gambar terlalu besar"):
+        ai_import.read_document("raksasa.png", bytes(png))
+
+
+def test_big_pdf_page_rendered_under_pixel_cap(monkeypatch):
+    from reportlab.pdfgen import canvas
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=(3000, 3000))  # 36 MP at scale 2
+    c.rect(50, 50, 200, 200, fill=1)
+    c.save()
+    sizes = []
+    monkeypatch.setattr(ai_import, "_jpeg_data_url", lambda image: sizes.append(image.size) or "data:x")
+    text, images = ai_import.read_document("poster.pdf", buf.getvalue())
+    assert images == ["data:x"] and len(sizes) == 1
+    assert 6_000_000 < sizes[0][0] * sizes[0][1] <= ai_import.MAX_PAGE_PIXELS == 12_000_000
+
+
+def test_oversized_upload_rejected_reading_only_limit_plus_one(client, monkeypatch):
+    from starlette.datastructures import UploadFile
+    asked, original = [], UploadFile.read
+
+    async def spy(self, size=-1):
+        asked.append(size)
+        return await original(self, size)
+    monkeypatch.setattr(UploadFile, "read", spy)
+    monkeypatch.setattr(ai_import, "read_document", lambda *a: pytest.fail("parser dijalankan"))
+    big = b"x" * (ai_import.MAX_UPLOAD_BYTES + 5000)
+    r = client.post("/api/ai-import/out/extract", headers=h(), files={"file": ("besar.pdf", big)})
+    assert r.status_code == 400 and r.json()["detail"] == "Ukuran berkas melebihi 8 MB."
+    assert asked == [ai_import.MAX_UPLOAD_BYTES + 1]
+
+
+def test_rate_limited_user_refused_before_parser_runs(client, monkeypatch):
+    fake_ai(monkeypatch, {"header": {}, "rows": []})
+    monkeypatch.setattr(ai_import.knowledge, "QUESTIONS_PER_HOUR", 0)
+    monkeypatch.setattr(ai_import, "read_document", lambda *a: pytest.fail("parser dijalankan"))
+    r = client.post("/api/ai-import/out/extract", headers=h(), files={"file": ("bast.docx", docx_bytes(["BAST", "Beras 300 KG"]))})
+    assert r.status_code == 429 and "Batas" in r.json()["detail"]

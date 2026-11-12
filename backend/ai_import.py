@@ -10,6 +10,7 @@ import base64
 import difflib
 import json
 import logging
+import math
 import re
 import uuid
 from datetime import datetime, timezone
@@ -37,6 +38,8 @@ ALLOWED_EXT = (".docx", ".xlsx", ".pdf") + IMAGE_EXT
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 MAX_TEXT_CHARS = 40_000
 MAX_PDF_PAGES = 5
+MAX_IMAGE_PIXELS = 40_000_000
+MAX_PAGE_PIXELS = 12_000_000
 MAX_ROWS = 200
 STALE = "Stok berubah sejak diperiksa. Tekan Periksa untuk melihat angka terbaru."
 
@@ -53,6 +56,7 @@ async def _user(kind: str, request: Request) -> dict:
 
 # ---------- reading the uploaded file ----------
 def xlsx_to_text(content: bytes) -> str:
+    knowledge.check_zip_size(content)
     wb = load_workbook(BytesIO(content), data_only=True, read_only=True)
     lines = []
     for ws in wb.worksheets:
@@ -81,7 +85,13 @@ def read_pdf(content: bytes) -> tuple[str, list[str]]:
         text = "\n".join(pdf[i].get_textpage().get_text_range() for i in range(pages)).strip()
         if len(re.sub(r"\s", "", text)) >= 40:
             return text, []
-        images = [_jpeg_data_url(pdf[i].render(scale=2).to_pil()) for i in range(min(len(pdf), MAX_PDF_PAGES))]
+        images = []
+        for i in range(min(len(pdf), MAX_PDF_PAGES)):
+            page = pdf[i]
+            width, height = page.get_size()
+            # Scale 2 for normal pages; a huge page gets a lower scale so its image stays under the cap.
+            scale = min(2.0, 0.99 * math.sqrt(MAX_PAGE_PIXELS / max(width * height, 1.0)))
+            images.append(_jpeg_data_url(page.render(scale=scale).to_pil()))
         return "", images
     finally:
         pdf.close()
@@ -98,7 +108,12 @@ def read_document(filename: str, content: bytes) -> tuple[str, list[str]]:
         if name.endswith(".pdf"):
             return read_pdf(content)
         from PIL import Image
-        return "", [_jpeg_data_url(Image.open(BytesIO(content)))]
+        image = Image.open(BytesIO(content))  # reads the header only; pixels are decoded later
+        if image.width * image.height > MAX_IMAGE_PIXELS:
+            raise knowledge.FileTooBig("Gambar terlalu besar. Kecilkan ukuran gambar lalu unggah ulang.")
+        return "", [_jpeg_data_url(image)]
+    except knowledge.FileTooBig:
+        raise
     except Exception:
         raise ValueError("Berkas tidak dapat dibaca. Pastikan berkas tidak rusak atau terkunci kata sandi.")
 
@@ -269,16 +284,16 @@ async def extract(kind: str, request: Request, file: UploadFile = File(...)):
     filename = file.filename or ""
     if not filename.lower().endswith(ALLOWED_EXT):
         raise HTTPException(400, "Format tidak didukung. Gunakan Word (.docx), Excel (.xlsx), PDF, atau foto/scan (.jpg, .png).")
-    content = await file.read()
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(400, "Ukuran berkas melebihi 8 MB.")
+    await knowledge._rate_limit(db, user["user_id"])
     try:
         text, images = await run_in_threadpool(read_document, filename, content)
     except ValueError as e:
         raise HTTPException(400, str(e))
     if not images and len(text.strip()) < 10:
         raise HTTPException(400, "Dokumen tidak berisi teks yang bisa dibaca.")
-    await knowledge._rate_limit(db, user["user_id"])
     catalog = await db.items.find({}, {"_id": 0, "id": 1, "name": 1, "unit": 1}).sort("id", 1).to_list(500)
     data, model = await extract_with_ai(kind, catalog, text[:MAX_TEXT_CHARS], images)
     header, rows = normalise_extraction(data, catalog)

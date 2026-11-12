@@ -307,3 +307,25 @@ def test_google_session_exchange_failures_give_503(client, monkeypatch):
         assert r.status_code == 503 and r.json()["detail"] == message, r.text
     _fake_http(monkeypatch, None, get=lambda url: _Resp(403, {}))
     assert client.post("/api/auth/session", json={"session_id": "abc"}).status_code == 401
+
+
+def test_docx_zip_bomb_and_oversized_upload_rejected(client, monkeypatch):
+    import zipfile
+    buf = io.BytesIO(make_docx(["Perbup tentang logistik kebencanaan, pasal penyaluran bantuan."]))
+    with zipfile.ZipFile(buf, "a", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("word/media/besar.bin", b"\0" * (51 * 1024 * 1024))
+    monkeypatch.setattr(knowledge, "Document", lambda *a: pytest.fail("parser dijalankan"))
+    r = upload(client, "admin", "bom.docx", buf.getvalue())
+    assert r.status_code == 400
+    assert r.json()["detail"] == "Berkas terlalu besar setelah dibuka. Kecilkan berkas lalu unggah ulang."
+
+    from starlette.datastructures import UploadFile
+    asked, original = [], UploadFile.read
+
+    async def spy(self, size=-1):
+        asked.append(size)
+        return await original(self, size)
+    monkeypatch.setattr(UploadFile, "read", spy)
+    r = upload(client, "admin", "besar.docx", b"x" * (knowledge.MAX_UPLOAD_BYTES + 5000))
+    assert r.status_code == 400 and r.json()["detail"] == "Ukuran berkas melebihi 5 MB."
+    assert asked == [knowledge.MAX_UPLOAD_BYTES + 1]
