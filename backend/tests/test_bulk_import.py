@@ -187,3 +187,9 @@ def test_public_distribution_groups_batch_and_counts_kk_once(client):
     assert len(events) == 1
     assert sorted(events[0]["item_names"]) == ["Beras", "Mi Instan", "Selimut"]
     assert events[0]["recipient_kk"] == 45 and events[0]["recipient_jiwa"] == 160
+    assert events[0]["incident_type"] == "Banjir"
+    summary = client.get("/api/public/distribution", params={"days": 7}).json()["incident_types"]
+    assert [s["incident_type"] for s in summary] == ["Banjir", "Kebakaran", "Tanah Longsor", "Angin Kencang", "Kekeringan", "Lainnya"]
+    assert summary[0] == {"incident_type": "Banjir", "events": 1, "locations": 1}
+    assert all(s["events"] == 0 for s in summary[1:])
+    assert set(events[0]) == {"event_id", "occurred_at", "location", "item_names", "incident_type", "recipient_kk", "recipient_jiwa"}
