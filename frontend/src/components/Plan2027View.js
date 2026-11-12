@@ -1,10 +1,8 @@
 import { CalendarClock } from "lucide-react";
 import StatCard, { EmptyState, Panel } from "./StatCard";
 import { StatusBadge } from "./StatusBadge";
-import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { fmtNum } from "../lib/format";
-
-const PALETTE = ["#38BDF8", "#F59E0B", "#34D399", "#F472B6", "#A78BFA", "#FB923C", "#22D3EE", "#E879F9", "#84CC16", "#F87171", "#94A3B8"];
 
 export default function Plan2027View({ data }) {
   return (
@@ -23,12 +21,12 @@ export default function Plan2027View({ data }) {
         <Panel title="Komposisi per Kategori" subtitle="Jumlah jenis item per kategori dalam RKA 2027" testId="panel-2027-categories">
           <div className="h-64">
             <ResponsiveContainer>
-              <BarChart data={data.categories} layout="vertical" margin={{ left: 8, right: 24 }}>
+              <BarChart data={data.categories} layout="vertical" margin={{ left: 8, right: 36 }}>
                 <XAxis type="number" hide />
                 <YAxis type="category" dataKey="category" width={150} tick={{ fill: "#94A3B8", fontSize: 11 }} axisLine={false} tickLine={false} />
                 <Tooltip cursor={{ fill: "rgba(56,189,248,0.06)" }} contentStyle={{ background: "#0F172A", border: "1px solid #334155", borderRadius: 8, fontSize: 12 }} formatter={(v) => [`${v} item`, "Jumlah"]} />
-                <Bar dataKey="count" radius={[0, 6, 6, 0]} barSize={14}>
-                  {data.categories.map((_, i) => <Cell key={i} fill={PALETTE[i % PALETTE.length]} />)}
+                <Bar dataKey="count" fill="#38BDF8" radius={[0, 6, 6, 0]} barSize={14}>
+                  <LabelList dataKey="count" position="right" fill="#94A3B8" fontSize={11} fontWeight={700} />
                 </Bar>
               </BarChart>
             </ResponsiveContainer>

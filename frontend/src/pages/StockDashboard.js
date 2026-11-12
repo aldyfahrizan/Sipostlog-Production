@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { AlertTriangle, ArrowDownToLine, ArrowUpFromLine, ClipboardCheck, Package, Search, TrendingUp, FileText } from "lucide-react";
-import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, LabelList, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api, downloadFile, errorMessage } from "../lib/api";
 import { toast } from "sonner";
 import StatCard, { EmptyState, PageHeader, Panel, Spinner } from "../components/StatCard";
@@ -11,8 +11,6 @@ import ItemTrendModal from "../components/ItemTrendModal";
 import { fmtDateTime, fmtNum } from "../lib/format";
 import { CancelTransactionButton, DeleteEntityButton } from "../components/AdminDeleteControls";
 import { useAuth } from "../context/AuthContext";
-
-const PALETTE = ["#F59E0B", "#38BDF8", "#34D399", "#F472B6", "#A78BFA", "#FB923C", "#22D3EE", "#E879F9", "#84CC16", "#F87171", "#94A3B8"];
 
 function YearToggle({ year, onChange }) {
   return (
@@ -89,12 +87,12 @@ export default function StockDashboard() {
         <Panel title="Komposisi per Kategori" subtitle="Jumlah jenis item per kategori (bukan volume stok)" testId="panel-categories">
           <div className="h-64">
             <ResponsiveContainer>
-              <BarChart data={data.categories} layout="vertical" margin={{ left: 8, right: 24 }}>
+              <BarChart data={data.categories} layout="vertical" margin={{ left: 8, right: 36 }}>
                 <XAxis type="number" hide />
                 <YAxis type="category" dataKey="category" width={150} tick={{ fill: "#94A3B8", fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(v) => v.replace("Logistik ", "")} />
                 <Tooltip cursor={{ fill: "rgba(245,158,11,0.06)" }} contentStyle={{ background: "#0F172A", border: "1px solid #334155", borderRadius: 8, fontSize: 12 }} formatter={(v, n) => [`${v} item`, n === "count" ? "Jumlah" : "Menipis"]} />
-                <Bar dataKey="count" radius={[0, 6, 6, 0]} barSize={14}>
-                  {data.categories.map((_, i) => <Cell key={i} fill={PALETTE[i % PALETTE.length]} />)}
+                <Bar dataKey="count" fill="#F59E0B" radius={[0, 6, 6, 0]} barSize={14}>
+                  <LabelList dataKey="count" position="right" fill="#94A3B8" fontSize={11} fontWeight={700} />
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
