@@ -193,6 +193,25 @@ def test_item_id_that_disagrees_with_document_name_is_flagged(client, monkeypatc
     assert stock(client, "beras") == 1000
 
 
+def test_fuzzy_and_unreadable_name_warnings_survive_recheck(client, monkeypatch):
+    fake_ai(monkeypatch, {"header": OUT_HEADER, "rows": [
+        {"item_id": None, "name": "Mie Instan", "quantity": 2, "unit": "DOS"},
+        {"item_id": "selimut", "name": "", "quantity": 1},
+    ]})
+    r = client.post("/api/ai-import/out/extract", headers=h(), files={"file": ("bast.docx", docx_bytes(["BAST", "Mie Instan 2"]))})
+    assert r.status_code == 200, r.text
+    first = r.json()["rows"]
+    assert [x["match"] for x in first] == ["fuzzy", "id"]
+    rows = [{k: x[k] for k in ("item_id", "quantity", "note", "source_name", "source_unit", "match")} for x in first]
+    v = client.post("/api/ai-import/out/validate", headers=h(), json={"header": OUT_HEADER, "rows": rows})
+    assert v.status_code == 200, v.text
+    again = v.json()["rows"]
+    assert "hanya mirip" in again[0]["warning"] and "tidak terbaca" in again[1]["warning"]
+    assert [x["warning"] for x in again] == [x["warning"] for x in first]
+    bad = client.post("/api/ai-import/out/validate", headers=h(), json={"header": OUT_HEADER, "rows": [{**rows[0], "match": "lain"}]})
+    assert bad.status_code == 422
+
+
 def test_name_mismatch_is_rechecked_on_validate_and_keeps_unit_warning(client):
     rows = [{"item_id": "beras", "quantity": 10, "source_name": "Selimut Tebal", "source_unit": "KARUNG"},
             {"item_id": "beras", "quantity": 1, "source_name": "beras"}, {"item_id": "selimut", "quantity": 1}]

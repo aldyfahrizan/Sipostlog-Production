@@ -15,6 +15,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from io import BytesIO
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from openpyxl import load_workbook
@@ -202,6 +203,7 @@ class RowIn(BaseModel):
     note: str = Field(default="", max_length=500)
     source_name: str = Field(default="", max_length=160)
     source_unit: str = Field(default="", max_length=20)
+    match: Literal["", "id", "name", "fuzzy"] = ""  # how the item was found; drives the name warnings
 
 
 class DraftBody(BaseModel):
@@ -276,6 +278,7 @@ async def draft_preview(db, kind: str, header: dict, rows: list[dict]) -> dict:
     preview = await (opname_preview(db, header, numbered) if kind == "opname" else preview_from(db, "out", header, numbered))
     for out, src in zip(preview["rows"], numbered):
         out["source_name"], out["source_unit"] = src.get("source_name", ""), src.get("source_unit", "")
+        out["match"] = src.get("match", "")
         if not src["item_id"]:
             out["error"] = "Barang belum dikenali. Pilih barang secara manual."
         elif out["unit"] and src.get("source_unit") and src["source_unit"].strip().lower() != out["unit"].lower() and not out["error"]:

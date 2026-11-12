@@ -846,7 +846,8 @@ BACKUP_UNFINISHED = {"running", "queued", "in_progress", "pending"}
 
 def short_fields(node: dict, names: list) -> str:
     """Like fields(), with every value cut short: file names and statuses come from the server as free text."""
-    return fields({name: (str(node[name])[:160] if isinstance(node.get(name), str) else node.get(name))
+    return fields({name: ((str(node[name]).rsplit("/", 1)[-1] if name == "filename" else str(node[name]))[:160]
+                          if isinstance(node.get(name), str) else node.get(name))
                    for name in names if isinstance(node, dict) and not isinstance(node.get(name), (dict, list))}, names)
 
 
@@ -855,9 +856,14 @@ def load_backups(uuid: str) -> list:
     if status != 200:
         fail(f"Jadwal backup tidak terbaca: {explain(status, payload)}")
     register_secrets(payload)
-    if isinstance(payload, dict):
-        payload = payload.get("data") or payload.get("backups") or []
-    return [item for item in payload if isinstance(item, dict)] if isinstance(payload, list) else []
+    if isinstance(payload, dict) and "uuid" in payload and "frequency" in payload:
+        payload = [payload]  # a single schedule returned bare
+    elif isinstance(payload, dict):
+        payload = next((payload[key] for key in ("data", "backups") if isinstance(payload.get(key), list)), None)
+    if not isinstance(payload, list):
+        # Only a real empty list means "no schedule"; anything else must not lead to creating a second one.
+        fail("Jawaban daftar jadwal backup tidak dikenali; tidak ada yang diubah.")
+    return [item for item in payload if isinstance(item, dict)]
 
 
 def load_executions(uuid: str, backup_uuid: str) -> list | None:

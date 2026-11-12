@@ -83,13 +83,24 @@ def test_locked_ip_cannot_use_up_the_username_ceiling(client):
 
 
 def test_username_ceiling_limits_distributed_guessing(client):
-    statuses = [login(client, "salah", f"198.51.100.{n}").status_code for n in range(30)]
-    assert statuses == [401] * 30
+    assert admin_login.USERNAME_ATTEMPT_LIMIT == 10
+    statuses = [login(client, "salah", f"198.51.100.{n}").status_code for n in range(10)]
+    assert statuses == [401] * 10
     blocked = login(client, PASSWORD, "192.0.2.200")
     assert blocked.status_code == 429
     assert blocked.headers["Retry-After"] == "900"
     # Another account is not affected.
     assert login(client, PASSWORD, "192.0.2.200", username="admin2").status_code == 200
+
+
+def test_username_lock_does_not_use_up_the_owner_address_allowance(client):
+    identifier = hashlib.sha256(b"username:kepala").hexdigest()
+    client.portal.call(client.db.login_attempts.insert_one, {
+        "identifier": identifier, "count": admin_login.USERNAME_ATTEMPT_LIMIT + 1,
+        "expires_at": datetime.now(timezone.utc) + timedelta(minutes=15)})
+    assert [login(client, PASSWORD, "203.0.113.9").status_code for _ in range(6)] == [429] * 6
+    client.portal.call(client.db.login_attempts.delete_one, {"identifier": identifier})
+    assert login(client, PASSWORD, "203.0.113.9").status_code == 200
 
 
 def test_primary_admin_cannot_be_demoted_or_deactivated(client):

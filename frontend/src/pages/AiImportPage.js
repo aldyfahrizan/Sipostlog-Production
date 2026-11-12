@@ -14,7 +14,7 @@ const KINDS = {
 const ACCEPT = ".docx,.xlsx,.pdf,.jpg,.jpeg,.png,.webp";
 const emptyHeader = { destination: "", incident_type: "", date: "", time: "", recipient_kk: "", recipient_jiwa: "", ref: "" };
 let rowKey = 0;
-const newRow = (r = {}) => ({ key: ++rowKey, item_id: r.item_id || "", quantity: r.quantity ?? "", note: r.note || "", source_name: r.source_name || "", source_unit: r.source_unit || "" });
+const newRow = (r = {}) => ({ key: ++rowKey, item_id: r.item_id || "", quantity: r.quantity ?? "", note: r.note || "", source_name: r.source_name || "", source_unit: r.source_unit || "", match: r.match || "" });
 
 function HeaderForm({ kind, header, set, incidents }) {
   const input = (key, label, props = {}) => (
@@ -66,7 +66,7 @@ export default function AiImportPage() {
 
   const payload = (d = draft) => ({
     header: Object.fromEntries(Object.entries(d.header).filter(([, v]) => v !== "" && v != null)),
-    rows: d.rows.map(({ item_id, quantity, note, source_name, source_unit }) => ({ item_id, quantity: quantity === "" ? null : quantity, note, source_name, source_unit })),
+    rows: d.rows.map(({ item_id, quantity, note, source_name, source_unit, match }) => ({ item_id, quantity: quantity === "" ? null : quantity, note, source_name, source_unit, match })),
   });
 
   const upload = async (file) => {
@@ -165,7 +165,7 @@ export default function AiImportPage() {
                         <td className="px-2 py-1.5 align-top num text-slate-500">{i + 1}</td>
                         <td className="px-2 py-1.5 align-top text-slate-600">{r.source_name || "—"}{r.source_unit && <span className="block text-[11px] text-slate-500">{r.source_unit}</span>}</td>
                         <td className="px-2 py-1.5 align-top">
-                          <select className="field !py-1 text-sm" value={r.item_id} onChange={(e) => setRow(r.key, { item_id: e.target.value })} aria-label={`Barang baris ${i + 1}`} data-testid={`ai-row-${i + 1}-item`}>
+                          <select className="field !py-1 text-sm" value={r.item_id} onChange={(e) => setRow(r.key, { item_id: e.target.value, match: "" })} aria-label={`Barang baris ${i + 1}`} data-testid={`ai-row-${i + 1}-item`}>
                             <option value="">— pilih barang —</option>{items.map((it) => <option key={it.id} value={it.id}>{it.name} ({it.unit})</option>)}
                           </select>
                           {c?.error && <div className="mt-1 text-xs text-red-700" data-testid={`ai-row-${i + 1}-error`}>✗ {c.error}</div>}

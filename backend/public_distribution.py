@@ -35,6 +35,7 @@ class PublicDistributionResponse(BaseModel):
     timezone: str
     incident_types: list[PublicIncidentSummary]
     events: list[PublicDistributionEvent]
+    truncated: bool = False  # more rows existed than MAX_ROWS; only the newest are included
 
 
 @router.get("/distribution", response_model=PublicDistributionResponse)
@@ -53,8 +54,11 @@ async def _load_distribution(db, days):
     query = {"type": "OUT", "cancelled": {"$ne": True}, "user_id": {"$ne": "system"}, "occurred_at": {"$gte": start.astimezone(timezone.utc), "$lte": now}}
     projection = {"_id": 0, "transaction_id": 1, "occurred_at": 1, "destination": 1,
                   "item_name": 1, "recipient_kk": 1, "recipient_jiwa": 1, "batch_id": 1, "incident_type": 1}
-    events, by_batch = [], {}
-    async for doc in db.transactions.find(query, projection).sort([("occurred_at", -1), ("transaction_id", 1)]).limit(MAX_ROWS):
+    events, by_batch, rows = [], {}, 0
+    async for doc in db.transactions.find(query, projection).sort([("occurred_at", -1), ("transaction_id", 1)]).limit(MAX_ROWS + 1):
+        rows += 1
+        if rows > MAX_ROWS:
+            break
         batch_id = doc.get("batch_id")
         if batch_id and batch_id in by_batch:
             # One imported BAST = one event; KK/jiwa belong to the batch and are counted once.
@@ -79,4 +83,4 @@ async def _load_distribution(db, days):
                 "locations": len({e["location"] for e in events if e["incident_type"] == t})} for t in INCIDENT_TYPES]
     return {"days": days, "start_date": start.date().isoformat(), "end_date": local_today.date().isoformat(),
             "incident_types": summary,
-            "timezone": "Asia/Makassar", "events": events}
+            "timezone": "Asia/Makassar", "events": events, "truncated": rows > MAX_ROWS}

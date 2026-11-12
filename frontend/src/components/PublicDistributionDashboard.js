@@ -53,6 +53,7 @@ export const PublicDistributionDashboard = () => {
     {!loading && !error && data && (() => {
       const shown = incident ? data.events.filter((event) => event.incident_type === incident) : data.events;
       return <>
+        {data.truncated && <p data-testid="distribution-truncated-note" className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">Data sangat banyak; hanya penyaluran terbaru yang ditampilkan.</p>}
         <IncidentTiles summary={data.incident_types || []} total={data.events.length} value={incident} onChange={setIncident} />
         {shown.length ? <PublicDistributionChart key={`${days}-${retry}-${incident}`} events={shown} /> : <div data-testid="distribution-empty-state" className="flex h-56 flex-col items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50 px-5 text-center"><CalendarDays size={30} className="text-slate-400" aria-hidden="true" /><p data-testid="distribution-empty-title" className="mt-4 text-sm font-semibold text-slate-700">Tidak ada catatan penyaluran {incident ? `untuk ${incident} ` : ""}dalam {days} hari terakhir.</p><p data-testid="distribution-empty-description" className="mt-2 max-w-md text-xs leading-relaxed text-slate-500">Pilih rentang atau jenis bencana lain, atau kunjungi kembali setelah petugas mencatat penyaluran.</p></div>}
       </>;

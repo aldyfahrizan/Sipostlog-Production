@@ -605,11 +605,39 @@ def test_db_backup_status_lists_configs_and_executions(world, tmp_path):
     assert f"uuid={BACKUP}" in text and "frequency=0 18 * * *" in text and "enabled=True" in text
     assert "database_backup_retention_amount_locally=7" in text
     assert "status=success" in text and "size=4096" in text and "mongo-dump-0.tar.gz" in text
-    assert "mongodump" not in text
+    assert "mongodump" not in text and "/data/coolify" not in text
     assert all(method == "GET" for method, path, _ in world.requests)
 
 
 def test_db_backup_status_without_config(world, tmp_path):
+    result = run(world, tmp_path, {"action": "db-backup-status"})
+    assert result.returncode == 0, visible(result)
+    assert "Belum ada jadwal backup" in visible(result)
+
+
+def test_db_backup_single_config_object_counts_as_existing(world, tmp_path):
+    world.backups = existing_backup()
+    result = run(world, tmp_path, {"action": "db-backup-enable", "confirm": "ya"})
+    text = visible(result)
+    assert result.returncode == 0, text
+    assert_no_secret(result, world)
+    assert f"uuid={BACKUP}" in text and "tidak ada yang diubah" in text
+    assert not [1 for method, path, _ in world.requests if method != "GET"]
+
+
+@pytest.mark.parametrize("answer", [{"message": "ok"}, {"data": {"uuid": "x"}}, "teks", None])
+def test_db_backup_unrecognised_list_answer_changes_nothing(world, tmp_path, answer):
+    world.backups = answer
+    result = run(world, tmp_path, {"action": "db-backup-enable", "confirm": "ya"})
+    text = visible(result)
+    assert result.returncode == 1, text
+    assert "Jawaban daftar jadwal backup tidak dikenali; tidak ada yang diubah." in text
+    assert "Belum ada jadwal backup" not in text
+    assert not [1 for method, path, _ in world.requests if method != "GET"]
+
+
+def test_db_backup_wrapped_empty_list_means_no_schedule(world, tmp_path):
+    world.backups = {"data": []}
     result = run(world, tmp_path, {"action": "db-backup-status"})
     assert result.returncode == 0, visible(result)
     assert "Belum ada jadwal backup" in visible(result)

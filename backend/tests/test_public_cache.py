@@ -100,14 +100,22 @@ def test_results_unchanged(client):
         "total_items": 2, "categories": [{"category": "Pangan", "count": 1}, {"category": "Sandang", "count": 1}]}
     body = client.get("/api/public/distribution?days=7").json()
     assert [e["event_id"] for e in body["events"]] == ["t3", "t2", "t1"]
-    assert set(body) == {"days", "start_date", "end_date", "timezone", "incident_types", "events"}
+    assert set(body) == {"days", "start_date", "end_date", "timezone", "incident_types", "events", "truncated"}
+    assert body["truncated"] is False
 
 
 def test_distribution_has_hard_row_limit(client, monkeypatch):
     assert public_distribution.MAX_ROWS == 5000
     monkeypatch.setattr(public_distribution, "MAX_ROWS", 2)
-    events = client.get("/api/public/distribution?days=7").json()["events"]
-    assert [e["event_id"] for e in events] == ["t3", "t2"]
+    body = client.get("/api/public/distribution?days=7").json()
+    assert [e["event_id"] for e in body["events"]] == ["t3", "t2"]
+    assert body["truncated"] is True
+
+
+def test_distribution_exactly_at_row_limit_is_not_truncated(client, monkeypatch):
+    monkeypatch.setattr(public_distribution, "MAX_ROWS", 3)
+    body = client.get("/api/public/distribution?days=7").json()
+    assert len(body["events"]) == 3 and body["truncated"] is False
 
 
 def test_initialize_database_creates_distribution_index(client):

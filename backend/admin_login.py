@@ -88,7 +88,7 @@ async def seed_local_admin(db):
 
 
 IP_ATTEMPT_LIMIT = 5         # per username + client address
-USERNAME_ATTEMPT_LIMIT = 30  # per username, all addresses together
+USERNAME_ATTEMPT_LIMIT = 10  # per username, all addresses together
 ATTEMPT_WINDOW = timedelta(minutes=15)
 
 
@@ -127,6 +127,8 @@ async def login_admin(body: AdminLoginBody, request: Request, response: Response
         # Not counted against the username: one blocked address must not use up the shared ceiling.
         raise _too_many_attempts()
     if await _count_attempt(db, identifier, now) > USERNAME_ATTEMPT_LIMIT:
+        # A username lock must not use up this address's own allowance.
+        await db.login_attempts.update_one({"identifier": ip_identifier}, {"$inc": {"count": -1}})
         raise _too_many_attempts()
     user = await db.users.find_one({"username": username, "auth_method": "password"}, {"_id": 0})
     password_hash = user.get("password_hash", "") if user else _DUMMY_HASH.decode()
