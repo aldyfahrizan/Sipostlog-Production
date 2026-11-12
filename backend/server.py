@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response as RawResponse, JSONResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ReturnDocument
-from pymongo.errors import AutoReconnect, BulkWriteError, ServerSelectionTimeoutError
+from pymongo.errors import AutoReconnect, BulkWriteError, PyMongoError, ServerSelectionTimeoutError
 from pydantic import BaseModel, Field
 
 from auth import (
@@ -252,9 +252,15 @@ class UserPatch(BaseModel):
 
 
 # ---------- public ----------
+HEALTH_DB_TIMEOUT_SECONDS = 3  # below the Dockerfile HEALTHCHECK timeout, so a dead database answers 503
+
+
 @api.get("/health")
 async def health():
-    count = await db.items.count_documents({})
+    try:
+        count = await asyncio.wait_for(db.items.count_documents({}), timeout=HEALTH_DB_TIMEOUT_SECONDS)
+    except (asyncio.TimeoutError, PyMongoError):
+        return JSONResponse(status_code=503, content={"status": "db_unavailable"})
     return {"status": "ok", "items": count, "expected": EXPECTED_ITEM_COUNT,
             "admin_password_config": "ok" if admin_password_config_ok() else "invalid",
             "ai": ai_config()["provider"], "time": now_utc().isoformat()}

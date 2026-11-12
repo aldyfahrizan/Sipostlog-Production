@@ -16,6 +16,27 @@ CredDev.txt
 credentials.json
 secrets.json
 
+# The patterns in this file are anchored at the repository root; these repeat the
+# sensitive and bulky ones at any depth (backend/.env, frontend/.env.local, ...).
+**/.env
+**/.env.*
+**/*.env
+**/CredDev.txt
+**/*.pem
+**/*.key
+**/credentials.json
+**/secrets.json
+**/node_modules
+**/__pycache__
+**/*.py[cod]
+**/.venv
+**/venv
+**/.ruff_cache
+**/.pytest_cache
+**/.mypy_cache
+**/tests
+**/test_reports
+
 # Dependencies & build output
 node_modules
 frontend/node_modules
