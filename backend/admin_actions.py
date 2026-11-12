@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from pymongo import ReturnDocument
 
 from auth import public_user, require_role
+from stock_lock import recover_expired
 
 router = APIRouter(prefix="/api")
 
@@ -99,6 +100,7 @@ async def cancel_transaction(transaction_id: str, body: ReasonBody, request: Req
                "category": tx["category"], "unit": tx["unit"]}
     # Receipt and quantity are written in the SAME atomic document operation.
     # Competing/repeated requests cannot apply this transaction's inverse twice.
+    await recover_expired(db, [tx["item_id"]])
     query = {"id": tx["item_id"], "_stock_lock": {"$exists": False},
              "currentStock": {"$gte": max(0, -change)}, "cancellation_receipts.entity_id": {"$ne": transaction_id}}
     item = await db.items.find_one_and_update(query, [{"$set": {

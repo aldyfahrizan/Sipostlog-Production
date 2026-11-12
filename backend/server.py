@@ -39,6 +39,7 @@ from sop import router as sop_router
 from knowledge import ai_config, router as knowledge_router
 from ai_import import router as ai_import_router
 from db_probe import router as db_probe_router
+from stock_lock import raise_if_leased, recover_expired
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("sipostlog")
@@ -164,20 +165,27 @@ async def record_transaction(tx_type: str, before: dict, after_qty: int, user: d
     return clean(tx)
 
 
+async def update_unlocked_item(query: dict, update: dict):
+    """One stock write on an item nobody has reserved; returns the document before, or None when nothing matched."""
+    async def attempt():
+        return await db.items.find_one_and_update({**query, "_stock_lock": {"$exists": False}}, update,
+                                                  projection={"_id": 0}, return_document=ReturnDocument.BEFORE)
+    before = await attempt()
+    if not before:
+        await raise_if_leased(db, query["id"])  # 409 under a live lease; an expired one is undone first
+        before = await attempt()
+    return before
+
+
 async def apply_stock_in(item_id: str, qty: int, user: dict, occurred_at: datetime, source: str, notes: str):
-    before = await db.items.find_one_and_update(
-        {"id": item_id, "_stock_lock": {"$exists": False}}, {"$inc": {"currentStock": qty}}, projection={"_id": 0}, return_document=ReturnDocument.BEFORE,
-    )
+    before = await update_unlocked_item({"id": item_id}, {"$inc": {"currentStock": qty}})
     if not before:
         raise HTTPException(status_code=404, detail="Item tidak ditemukan")
     return await record_transaction("IN", before, before["currentStock"] + qty, user, occurred_at, source=source, notes=notes)
 
 
 async def apply_stock_out(item_id: str, qty: int, user: dict, occurred_at: datetime, destination: str, incident_type: str, notes: str, recipient_kk=None, recipient_jiwa=None):
-    before = await db.items.find_one_and_update(
-        {"id": item_id, "currentStock": {"$gte": qty}, "_stock_lock": {"$exists": False}}, {"$inc": {"currentStock": -qty}},
-        projection={"_id": 0}, return_document=ReturnDocument.BEFORE,
-    )
+    before = await update_unlocked_item({"id": item_id, "currentStock": {"$gte": qty}}, {"$inc": {"currentStock": -qty}})
     if not before:
         item = await get_item_or_404(item_id)
         raise HTTPException(status_code=400, detail=f"Stok tidak mencukupi. Tersedia {item['currentStock']} {item['unit']}, diminta {qty} {item['unit']}")
@@ -189,9 +197,7 @@ async def apply_stock_out(item_id: str, qty: int, user: dict, occurred_at: datet
 
 
 async def apply_adjustment(item_id: str, new_qty: int, user: dict, occurred_at: datetime, reason: str, notes: str):
-    before = await db.items.find_one_and_update(
-        {"id": item_id, "_stock_lock": {"$exists": False}}, {"$set": {"currentStock": new_qty}}, projection={"_id": 0}, return_document=ReturnDocument.BEFORE,
-    )
+    before = await update_unlocked_item({"id": item_id}, {"$set": {"currentStock": new_qty}})
     if not before:
         raise HTTPException(status_code=404, detail="Item tidak ditemukan")
     return await record_transaction("ADJUSTMENT", before, new_qty, user, occurred_at, reason=reason.strip(), notes=notes)
@@ -795,6 +801,7 @@ async def ensure_initialized():
         if not stamp or stamp.get("value") != INIT_FINGERPRINT:
             await initialize_database()
         await reconcile_cancellations(db)
+        await recover_expired(db)  # undo batches a dead process left unfinished; live leases are kept
         _init_done = True
         logger.info("Katalog aktif: %d item", await db.items.count_documents({}))
 

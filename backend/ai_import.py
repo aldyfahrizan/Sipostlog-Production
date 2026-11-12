@@ -27,7 +27,7 @@ from auth import ROLE_ADMIN, ROLE_OPNAME, ROLE_PETUGAS, require_role
 from bulk_excel import to_date, to_int
 from bulk_import import preview_from, write_batch
 from seed_data import INCIDENT_TYPES
-from stock_lock import reserve_stock_with_token
+from stock_lock import LEASE_LOST, held, stock_batch
 
 router = APIRouter(prefix="/api/ai-import")
 logger = logging.getLogger("sipostlog")
@@ -232,8 +232,8 @@ async def opname_preview(db, raw_header: dict, raw_rows: list) -> dict:
         item = items.get(r["item_id"])
         try:
             row["quantity"] = to_int(r["quantity"], positive=False)
-        except ValueError:
-            row["error"] = "Stok fisik harus bilangan bulat 0 atau lebih."
+        except ValueError as e:
+            row["error"] = str(e) or "Stok fisik harus bilangan bulat 0 atau lebih."
         if not item:
             row["error"] = "ID item tidak dikenal." if r["item_id"] else "ID Item kosong."
         else:
@@ -333,14 +333,16 @@ async def write_opname(db, preview: dict, user: dict, batch: dict) -> tuple[list
     rows, occurred = preview["rows"], preview["_occurred_at"]
     lock_rows = [{"item_id": r["item_id"], "previous_quantity": r["current_stock"]} for r in rows]
     saved, unchanged = [], 0
-    async with reserve_stock_with_token(db, lock_rows) as (token, _):
+    async with stock_batch(db, lock_rows, batch["batch_id"], rows) as (token, _):
         for r in rows:
             if r["quantity"] == r["current_stock"]:
                 unchanged += 1
                 continue
             before = await db.items.find_one_and_update(
-                {"id": r["item_id"], "_stock_lock": token}, {"$set": {"currentStock": r["quantity"]}},
+                {"id": r["item_id"], **held(token)}, {"$set": {"currentStock": r["quantity"]}},
                 projection={"_id": 0}, return_document=ReturnDocument.BEFORE)
+            if not before:  # the lease was lost: this holder must not write
+                raise HTTPException(409, LEASE_LOST)
             reason = "Stock opname via dokumen (dibaca AI)" + (f": {r['note']}" if r["note"] else "")
             saved.append(await record_transaction("ADJUSTMENT", before, r["quantity"], user, occurred,
                                                   reason=reason, notes=f"Dokumen {batch['batch_file']}", **batch))

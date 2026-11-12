@@ -39,6 +39,7 @@ KINDS = {
 }
 TABLE_HEADERS = ["ID Item", "Nama Item", "Kategori", "Satuan", "Stok Sistem"]
 MAX_UPLOAD_BYTES = 2 * 1024 * 1024
+MAX_QUANTITY = 1_000_000_000
 
 
 def _norm(value) -> str:
@@ -182,4 +183,6 @@ def to_int(value, *, positive: bool) -> int:
         raise ValueError
     if value < (1 if positive else 0):
         raise ValueError
+    if value > MAX_QUANTITY:
+        raise ValueError("Jumlah terlalu besar. Paling banyak 1.000.000.000 per baris.")
     return value
