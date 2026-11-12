@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response as RawResponse, JSONResponse
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import ReturnDocument
-from pymongo.errors import BulkWriteError
+from pymongo.errors import AutoReconnect, BulkWriteError, ServerSelectionTimeoutError
 from pydantic import BaseModel, Field
 
 from auth import (
@@ -41,7 +41,7 @@ from ai_import import router as ai_import_router
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("sipostlog")
 
-client = AsyncIOMotorClient(os.environ["MONGO_URL"])
+client = AsyncIOMotorClient(os.environ["MONGO_URL"], serverSelectionTimeoutMS=10000)
 db = client[os.environ["DB_NAME"]]
 
 app = FastAPI(title="SIPOSTLOG API", version="2.0.0")
@@ -774,9 +774,25 @@ async def ensure_initialized():
         logger.info("Katalog aktif: %d item", await db.items.count_documents({}))
 
 
+STARTUP_DB_ATTEMPTS = int(os.environ.get("STARTUP_DB_ATTEMPTS", "8"))
+
+
 @app.on_event("startup")
 async def startup():
-    await ensure_initialized()
+    # A database that is briefly unreachable (restarting, slow after a VPS reboot)
+    # should not kill the deploy: retry with backoff before giving up.
+    delay = 2
+    for attempt in range(1, STARTUP_DB_ATTEMPTS + 1):
+        try:
+            await ensure_initialized()
+            return
+        except (ServerSelectionTimeoutError, AutoReconnect) as exc:
+            if attempt == STARTUP_DB_ATTEMPTS:
+                raise
+            logger.warning("Database belum bisa dijangkau (percobaan %d/%d): %s; coba lagi dalam %ds",
+                           attempt, STARTUP_DB_ATTEMPTS, str(exc).split(",")[0], delay)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 20)
 
 
 @app.on_event("shutdown")
