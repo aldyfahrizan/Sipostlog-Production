@@ -24,6 +24,7 @@ function ExportCard({ icon: Icon, title, desc, onDownload, onPdf, busyKey, busy,
 
 export default function ExcelPage() {
   const [range, setRange] = useState({ start: todayYMD(-29), end: todayYMD() });
+  const [stockDate, setStockDate] = useState(todayYMD());
   const [busy, setBusy] = useState("");
   const [importResult, setImportResult] = useState(null);
   const [dragging, setDragging] = useState(false);
@@ -61,10 +62,12 @@ export default function ExcelPage() {
     <div data-testid="excel-page">
       <PageHeader eyebrow="Laporan" title="Ekspor & Impor Excel" description="Unduh laporan siap cetak dalam format .xlsx atau PDF berkop surat BPBD, atau perbarui stok hasil opname secara massal dengan mengunggah kembali template Excel." />
 
-      <div className="mb-4 flex flex-wrap items-center gap-3"><span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Rentang laporan:</span><DateRangePicker value={range} onChange={setRange} /></div>
+      <div className="mb-4 flex flex-wrap items-center gap-3"><span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Rentang laporan:</span><DateRangePicker value={range} onChange={setRange} />
+        <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-400">Posisi stok per tanggal:
+          <input type="date" value={stockDate} max={todayYMD()} onChange={(e) => setStockDate(e.target.value || todayYMD())} className="field !w-auto !py-1.5 text-xs" data-testid="export-stock-date-input" /></label></div>
       <div className="grid gap-4 md:grid-cols-3 stagger">
-        <ExportCard testId="export-stock" icon={Package} title="Laporan Stok" desc="37 item: nama, kategori, stok, satuan, ambang minimum, status, dan pembaruan terakhir." busy={busy} busyKey="stock"
-          onDownload={() => dl("stock", "/export/stock")} onPdf={() => dl("stock-pdf", "/export/stock/pdf", "laporan-stok.pdf")} />
+        <ExportCard testId="export-stock" icon={Package} title="Laporan Stok" desc="37 item: nama, kategori, stok pada tanggal terpilih, satuan, ambang minimum, status, dan pembaruan terakhir." busy={busy} busyKey="stock"
+          onDownload={() => dl("stock", `/export/stock?date=${stockDate}`)} onPdf={() => dl("stock-pdf", `/export/stock/pdf?date=${stockDate}`, "laporan-stok.pdf")} />
         <ExportCard testId="export-distribution" icon={Truck} title="Laporan Penyaluran" desc="Rekap per item, per tujuan, dan rincian transaksi penyaluran pada rentang tanggal terpilih." busy={busy} busyKey="dist"
           onDownload={() => dl("dist", `/export/distribution?start=${range.start}&end=${range.end}`)} onPdf={() => dl("dist-pdf", `/export/distribution/pdf?start=${range.start}&end=${range.end}`, "laporan-penyaluran.pdf")} />
         <ExportCard testId="export-transactions" icon={History} title="Riwayat Transaksi" desc="Seluruh mutasi stok (masuk, penyaluran, koreksi) pada rentang tanggal terpilih." busy={busy} busyKey="tx"

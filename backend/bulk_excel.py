@@ -6,6 +6,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
 
+from report_dates import dicetak_wita
 from excel_utils import BORDER, HEADER_FILL, HEADER_FONT, TITLE_FONT
 
 FILL_ME = PatternFill("solid", fgColor="FEF3C7")
@@ -52,7 +53,7 @@ def build_bulk_template(kind: str, items: list, printed_by: str, incident_types:
     ws.title = "Barang Masuk" if kind == "in" else "Penyaluran"
     ws.append([spec["title"]])
     ws["A1"].font = TITLE_FONT
-    ws.append([f"BPBD Kabupaten Banjar — SIPOSTLOG · Dicetak {datetime.now().strftime('%d/%m/%Y %H:%M')} oleh {printed_by}"])
+    ws.append([f"BPBD Kabupaten Banjar — SIPOSTLOG · Dicetak {dicetak_wita()} oleh {printed_by}"])
     ws.append(["Petunjuk: isi kotak kuning. Satu berkas = satu BAST. Jangan ubah kolom ID Item; kosongkan jumlah untuk barang yang tidak ada di BAST."])
     ws.append([])
     incident_row = None

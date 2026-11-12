@@ -1,5 +1,4 @@
 """Downloadable user module (PDF) built from sop_content."""
-from datetime import datetime
 from io import BytesIO
 from xml.sax.saxutils import escape
 
@@ -10,6 +9,7 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.platypus import KeepTogether, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from report_dates import dicetak_wita
 from pdf_utils import INK, REPORT_TITLE_STYLE, SIGN_STYLE, _letterhead
 from sop_content import ROLE_ACCESS, SECTIONS, SOP_META
 
@@ -128,7 +128,7 @@ def build_sop_pdf(printed_by: str) -> bytes:
             el.append(_bullets(sec["rules"]))
 
     el.append(Spacer(1, 18))
-    el.append(Paragraph(f"Dicetak dari SIPOSTLOG oleh {escape(printed_by)} pada {datetime.now().strftime('%d/%m/%Y %H:%M')}.", TAG))
+    el.append(Paragraph(f"Dicetak dari SIPOSTLOG oleh {escape(printed_by)} pada {dicetak_wita()}.", TAG))
     el.append(Spacer(1, 6))
     el.append(KeepTogether([_approval_block()]))
     doc.build(el, onFirstPage=_footer, onLaterPages=_footer)

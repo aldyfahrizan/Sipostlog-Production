@@ -1,9 +1,10 @@
 from io import BytesIO
-from datetime import datetime
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+
+from report_dates import dicetak_wita
 
 HEADER_FILL = PatternFill("solid", fgColor="0F172A")
 HEADER_FONT = Font(bold=True, color="FFFFFF")
@@ -60,7 +61,7 @@ def build_opname_template(items: list, printed_by: str) -> bytes:
     _write_sheet(
         ws,
         "Template Stock Opname — Isi kolom 'Stok Fisik (Isi)' lalu unggah kembali",
-        [("Dicetak", datetime.now().strftime("%d/%m/%Y %H:%M")), ("Oleh", printed_by),
+        [("Dicetak", dicetak_wita()), ("Oleh", printed_by),
          ("Petunjuk", "Jangan ubah kolom ID Item. Kosongkan Stok Fisik jika tidak ada perubahan.")],
         headers, rows,
     )
