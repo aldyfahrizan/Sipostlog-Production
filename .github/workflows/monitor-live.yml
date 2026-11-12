@@ -1,0 +1,42 @@
+name: Pantau Aplikasi Live
+
+# Setiap 15 menit memeriksa tiga alamat aplikasi: halaman depan, /api/health, dan
+# /api/health/db (uji koneksi BARU ke database). Semuanya harus menjawab 200. Kalau ada
+# yang gagal, diulang sekali setelah 75 detik; kalau masih gagal, workflow ini gagal.
+# Catatan: GitHub mengirim e-mail kegagalan kepada orang yang terakhir mengubah jadwal
+# (cron) di berkas ini, dan menghentikan jadwal bila repo tidak ada aktivitas selama
+# 60 hari (aktifkan lagi dari tab Actions).
+
+on:
+  schedule:
+    - cron: '7,22,37,52 * * * *'
+  workflow_dispatch:
+
+env:
+  APP_URL: http://x43jcxgopn0ec7h5acs71bbw.103.127.96.32.sslip.io
+
+permissions:
+  contents: read
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Halaman depan, API, dan koneksi baru ke database
+        run: |
+          periksa() {
+            gagal=""
+            for path in / /api/health /api/health/db; do
+              code=$(curl -sS -m 20 -o /dev/null -w '%{http_code}' "$APP_URL$path" || true)
+              echo "GET $path -> HTTP $code"
+              [ "$code" = "200" ] || gagal="$gagal $path(HTTP $code)"
+            done
+            [ -z "$gagal" ]
+          }
+          periksa && exit 0
+          echo "Ada yang gagal:$gagal. Mencoba lagi dalam 75 detik."
+          sleep 75
+          periksa && { echo "Percobaan kedua berhasil."; exit 0; }
+          echo "::error::Aplikasi bermasalah, dua kali diperiksa tetap gagal:$gagal"
+          exit 1
