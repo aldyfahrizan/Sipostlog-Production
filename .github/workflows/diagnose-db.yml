@@ -1,0 +1,25 @@
+name: Diagnosa Koneksi MongoDB
+
+# Mengetuk port publik MongoDB tanpa password untuk melihat bagaimana koneksi BARU dijawab.
+# Port diberikan saat menjalankan dan disamarkan di log.
+
+on:
+  workflow_dispatch:
+    inputs:
+      port:
+        description: Port publik MongoDB
+        required: true
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Samarkan port di log
+        run: echo "::add-mask::${{ inputs.port }}"
+      - run: pip install -q pymongo==4.6.3
+      - name: Periksa port MongoDB
+        run: python .github/scripts/diagnose_mongo.py 103.127.96.32 "${{ inputs.port }}"
+      - name: Pembanding - aplikasi yang sedang berjalan
+        run: curl -sS -m 20 http://x43jcxgopn0ec7h5acs71bbw.103.127.96.32.sslip.io/api/health; echo
