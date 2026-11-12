@@ -31,11 +31,11 @@ Dokumen ini menjelaskan cara menjalankan Sipostlog di **Coolify self-hosted** me
 ## Langkah 3 — Environment Variables
 | Key | Contoh | Keterangan |
 |---|---|---|
-| `MONGO_URL` | `mongodb://root:PASSWORD@<service>:27017/?directConnection=true` | Connection string MongoDB Coolify |
+| `MONGO_URL` | `mongodb://root:PASSWORD@<service>:27017/?directConnection=true` | Connection string **internal** MongoDB (hostname service Coolify). Port publik database harus tetap tertutup |
 | `DB_NAME` | `sipostlog` | Nama database |
 | `CORS_ORIGINS` | `https://sipostlog.domain.id` | Domain publik aplikasi (pisahkan koma bila lebih dari satu) |
 | `ADMIN_USERNAME` | `admin` | Username admin utama |
-| `ADMIN_PASSWORD_HASH` | `$2b$12$...` | Hash bcrypt password admin |
+| `ADMIN_PASSWORD_HASH` | `$2b$12$...` | Hash bcrypt password admin. Wajib centang **Is Literal** |
 | `LOCAL_ADMIN_EMAIL` | `admin@sipostlog.local` | Email internal akun admin lokal |
 | `ADMIN_EMAIL` | `aldyfahrizan@gmail.com` | Email yang otomatis menjadi admin saat login Google |
 | `AI_BASE_URL` | `https://<host-penyedia>/v1` | (Opsional) Penyedia AI kompatibel OpenAI (mis. Kelontong AI). Bila diisi bersama `AI_API_KEY`, dipakai menggantikan OpenRouter |
@@ -61,7 +61,7 @@ python3 -c "import bcrypt; print(bcrypt.hashpw(b'PASSWORD_BARU', bcrypt.gensalt(
 3. Setelah status `running:healthy`, buka domain aplikasi.
 
 ## Langkah 4b — Auto-deploy dari GitHub
-Workflow `.github/workflows/deploy-coolify.yml` memanggil API Coolify setiap ada push/merge ke `main`.
+Coolify sudah deploy ulang otomatis lewat webhook setiap ada push/merge ke `main`. Workflow `.github/workflows/deploy-coolify.yml` bersifat opsional: ia memicu deploy yang sama lewat API Coolify.
 1. Coolify → **Keys & Tokens** → **API tokens** → buat token dengan izin `deploy`.
 2. GitHub → repo → **Settings → Secrets and variables → Actions → New repository secret**, isi `COOLIFY_TOKEN` dengan token dari langkah 1.
    Alamat panel dan UUID aplikasi sudah diatur di blok `env` workflow; bila berubah, edit di sana atau isi secret `COOLIFY_URL` / `COOLIFY_APP_UUID` untuk menimpanya.
@@ -69,8 +69,23 @@ Workflow `.github/workflows/deploy-coolify.yml` memanggil API Coolify setiap ada
 
 > Tanda `$` pada `ADMIN_PASSWORD_HASH` wajib dilindungi: centang **Is Literal** pada variabel tersebut. Tanpa itu Coolify memotong hash dan admin tidak bisa login (`/api/health` menampilkan `admin_password_config: "invalid"`).
 
+## Langkah 4c — Mengoperasikan Coolify dari GitHub
+Workflow **Operasi Coolify** (`.github/workflows/coolify-ops.yml`) menjalankan perintah API Coolify dari tab **Actions → Operasi Coolify → Run workflow**, tanpa membuka panel:
+
+| Perintah | Fungsi |
+|---|---|
+| `status` | Kondisi server, database, aplikasi, deploy terakhir, dan nama variabel |
+| `db-logs`, `app-logs`, `deploy-logs` | Membaca log (nilai rahasia disamarkan) |
+| `db-restart` | Restart MongoDB, lalu menunggu sampai koneksi baru diterima |
+| `db-private` | Menutup port publik MongoDB |
+| `deploy` | Deploy aplikasi dan menunggu hasilnya |
+| `env-set` | Mengisi variabel lingkungan aplikasi |
+| `ai-probe` | Melihat daftar model penyedia AI dan menguji satu pertanyaan |
+
+Butuh secret `COOLIFY_TOKEN` (token API Coolify dengan izin `read`, `write`, `deploy`, dan `read:sensitive` untuk membaca log). Perintah yang mengubah server wajib mengisi `confirm` dengan `ya`. Untuk `env-set` dan `ai-probe`, nilai rahasia diambil dari secret bernama sama (mis. `AI_API_KEY`) bila `value` dikosongkan.
+
 ## Langkah 5 — Verifikasi
-1. `https://<domain>/api/health` → `{"status":"ok","items":37,...}`
+1. `https://<domain>/api/health` → `{"status":"ok","items":37,"expected":37,...}`. Angka `items` bisa berbeda setelah katalog diubah
 2. Halaman publik tampil (katalog tanpa angka stok).
 3. Login `/login` dengan `ADMIN_USERNAME` + password.
 4. Reload halaman tetap login (cookie sesi bekerja).
@@ -90,5 +105,5 @@ Workflow `.github/workflows/deploy-coolify.yml` memanggil API Coolify setiap ada
 ## Troubleshooting
 - **`Asal permintaan tidak diizinkan`** → `CORS_ORIGINS` tidak memuat domain persis (termasuk `https://`, tanpa trailing slash).
 - **Build gagal `Killed` / OOM** → swap belum aktif atau RAM habis; cek `free -m` dan `dmesg | tail`.
-- **Container `unhealthy`** → cek log container; pastikan `MONGO_URL` dapat dijangkau dari dalam container.
+- **Container `unhealthy`** → cek log container; pastikan `MONGO_URL` memakai hostname internal database dan dapat dijangkau dari dalam container. Jangan membuka port publik database untuk mengatasinya.
 - **Login tidak bertahan** → cookie memakai `Secure` + `SameSite=None`, jadi **wajib HTTPS**.

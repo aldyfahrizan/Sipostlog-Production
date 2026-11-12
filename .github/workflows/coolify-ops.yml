@@ -26,6 +26,7 @@ on:
           - deploy
           - env-set
           - app-set
+          - ai-probe
       token:
         description: Token API Coolify (kosongkan bila secret COOLIFY_TOKEN sudah diisi)
         required: false
@@ -40,7 +41,7 @@ on:
         description: Nama variabel (env-set) atau pengaturan (app-set)
         required: false
       value:
-        description: Nilai untuk key. Untuk deploy-logs = UUID deploy, untuk db-* = UUID database (boleh kosong)
+        description: Nilai untuk key (kosong = ambil dari secret bernama sama). deploy-logs = UUID deploy, db-* = UUID database, ai-probe = alamat dasar penyedia
         required: false
       envs_json:
         description: 'Beberapa variabel sekaligus, contoh {"AI_MODEL":"nama-model"}'
@@ -61,12 +62,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
       - name: Jalankan perintah
         env:
           COOLIFY_TOKEN_SECRET: ${{ secrets.COOLIFY_TOKEN }}
           COOLIFY_URL_SECRET: ${{ secrets.COOLIFY_URL }}
+          # Nilai rahasia untuk env-set (value dikosongkan) dan ai-probe diambil dari secret bernama sama.
+          SECRET_ENV_AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          SECRET_ENV_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           PYTHONUNBUFFERED: "1"
         run: python3 .github/scripts/coolify_ops.py

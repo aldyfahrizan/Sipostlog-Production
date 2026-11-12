@@ -19,6 +19,9 @@ env:
   DEFAULT_COOLIFY_URL: http://103.127.96.32:8000
   DEFAULT_COOLIFY_APP_UUID: x43jcxgopn0ec7h5acs71bbw
 
+permissions:
+  contents: read
+
 jobs:
   deploy:
     runs-on: ubuntu-latest

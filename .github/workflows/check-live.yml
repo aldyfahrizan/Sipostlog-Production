@@ -9,6 +9,9 @@ on:
 env:
   APP_URL: http://x43jcxgopn0ec7h5acs71bbw.103.127.96.32.sslip.io
 
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest

@@ -92,6 +92,14 @@ MONGO_LOG = "\n".join([
                                               "planSummary": "IXSCAN { session_token: 1 }", "durationMillis": 120}}),
     json.dumps({"t": {"$date": "2026-11-11T05:17:03.000+00:00"}, "s": "E", "c": "STORAGE", "id": 1, "ctx": "conn8",
                 "msg": "Write failed", "attr": {"error": "E11000 duplicate key error dup key: { session_token: \"" + SESSION_TOKEN + "\" }"}}),
+    json.dumps({"t": {"$date": "2026-11-11T05:17:04.000+00:00"}, "s": "I", "c": "NETWORK", "id": 22943, "ctx": "listener",
+                "msg": "Connection accepted", "attr": {"remote": "10.0.1.9:51300", "connectionId": 9, "connectionCount": 819}}),
+    json.dumps({"t": {"$date": "2026-11-11T05:17:04.100+00:00"}, "s": "I", "c": "NETWORK", "id": 51800, "ctx": "conn9",
+                "msg": "client metadata", "attr": {"remote": "10.0.1.9:51300", "client": "conn9",
+                                                   "doc": {"driver": {"name": "PyMongo|Motor", "version": "4.6.3"},
+                                                           "application": {"name": "sipostlog"}}}}),
+    json.dumps({"t": {"$date": "2026-11-11T05:17:05.000+00:00"}, "s": "I", "c": "NETWORK", "id": 22943, "ctx": "listener",
+                "msg": "Connection accepted", "attr": {"remote": "203.0.113.77:40000", "connectionId": 10, "connectionCount": 819}}),
     "::stop-commands::pwned",
     '{"session_token": "' + SESSION_TOKEN + '", "fragment of a long line',
     "MongoDB init process complete; ready for start up.",
@@ -143,6 +151,13 @@ def make_handler(world: World):
                 return self.send(200, "OK", text=True)
             if path == "/login":
                 return self.send(200, "<html>login</html>", text=True)
+            if path.startswith("/ai/v1/"):
+                if self.headers.get("Authorization") != f"Bearer {AI_KEY}":
+                    return self.send(401, {"error": {"message": "Invalid API key"}})
+                if path == "/ai/v1/models":
+                    return self.send(200, {"data": [{"id": "model-teks"}, {"id": "model-gambar"}]})
+                if path == "/ai/v1/chat/completions":
+                    return self.send(200, {"choices": [{"message": {"content": "siap"}}], "model": body.get("model")})
             if not path.startswith("/api/v1/"):
                 return self.send(404, {"message": "Not found."})
             if self.headers.get("Authorization") != f"Bearer {TOKEN}":
@@ -156,6 +171,11 @@ def make_handler(world: World):
                                         "settings": {"is_reachable": True, "is_usable": True, "sentinel_token": SENTINEL}}])
             if route == "/databases":
                 return self.send(200, [world.database()])
+            if route == "/resources":
+                return self.send(200, [{**world.application(), "type": "application"},
+                                       {**world.database(), "type": "standalone-mongodb"},
+                                       {"uuid": "ai1", "name": "gerbang-ai", "type": "application",
+                                        "status": "running:healthy", "fqdn": "https://ai.example.test"}])
             if route == f"/databases/{DB}" and method == "GET":
                 if world.restart_polls is not None:
                     world.restart_polls -= 1
@@ -252,7 +272,7 @@ def world():
     mongo.close()
 
 
-def run(world: World, tmp_path, inputs: dict, token_in_secret: bool = False):
+def run(world: World, tmp_path, inputs: dict, token_in_secret: bool = False, extra_env: dict | None = None):
     event = tmp_path / "event.json"
     payload = dict(inputs)
     if not token_in_secret:
@@ -264,6 +284,7 @@ def run(world: World, tmp_path, inputs: dict, token_in_secret: bool = False):
     }
     if token_in_secret:
         env["COOLIFY_TOKEN_SECRET"] = TOKEN
+    env.update(extra_env or {})
     result = subprocess.run([sys.executable, str(SCRIPT)], env=env, capture_output=True, text=True, timeout=120)
     return result
 
@@ -375,6 +396,7 @@ def test_db_private_rolls_back_when_app_depends_on_public_port(world, tmp_path):
     text = visible(result)
     assert result.returncode == 1, text
     assert world.is_public is True
+    assert ("PATCH", f"/api/v1/databases/{DB}", {"is_public": True, "public_port": world.mongo_port}) in world.requests
     assert "Penutupan port dibatalkan" in text
     assert_no_secret(result, world)
 
@@ -420,3 +442,50 @@ def test_app_set_only_allows_healthcheck_numbers(world, tmp_path):
     good = run(world, tmp_path, {"action": "app-set", "confirm": "ya", "key": "health_check_retries", "value": "40"})
     assert good.returncode == 0, visible(good)
     assert ("PATCH", f"/api/v1/applications/{APP}", {"health_check_retries": 40}) in world.requests
+
+
+def test_status_lists_every_resource(world, tmp_path):
+    text = visible(run(world, tmp_path, {"action": "status"}))
+    assert "name=gerbang-ai, type=application, status=running:healthy, fqdn=https://ai.example.test" in text
+
+
+def test_db_logs_show_who_holds_connections(world, tmp_path):
+    result = run(world, tmp_path, {"action": "db-logs", "lines": "50"})
+    text = visible(result)
+    assert_no_secret(result, world)
+    assert "10.0.1.9: 1 / 0 / 1" in text                      # private address shown: accepted / ended / refused
+    assert "203.0.113.77" not in text and "<ip>: 1 / 0 / 0" in text   # public address hidden
+    assert "1x  10.0.1.9 | PyMongo|Motor | sipostlog" in text
+
+
+def test_db_private_can_be_forced_without_rollback(world, tmp_path):
+    world.mongo_accepts, world.app_needs_public_port = True, True
+    result = run(world, tmp_path, {"action": "db-private", "confirm": "ya", "force": "ya"})
+    text = visible(result)
+    assert result.returncode == 0, text
+    assert world.is_public is False and "port TETAP ditutup" in text
+
+
+def test_env_set_takes_empty_value_from_repository_secret(world, tmp_path):
+    result = run(world, tmp_path, {"action": "env-set", "confirm": "ya", "key": "AI_API_KEY", "value": ""},
+                 extra_env={"SECRET_ENV_AI_API_KEY": NEW_SECRET_VALUE})
+    text = visible(result)
+    assert result.returncode == 0, text
+    assert_no_secret(result, world)
+    assert {env["key"]: env["value"] for env in world.envs}["AI_API_KEY"] == NEW_SECRET_VALUE
+    missing = run(world, tmp_path, {"action": "env-set", "confirm": "ya", "key": "OPENROUTER_API_KEY", "value": ""})
+    assert missing.returncode == 1 and "secret GitHub" in visible(missing)
+
+
+def test_ai_probe_lists_models_and_chats_without_coolify_token(world, tmp_path):
+    result = run(world, tmp_path, {"action": "ai-probe", "token": "", "value": world.base + "/ai/v1"},
+                 extra_env={"SECRET_ENV_AI_API_KEY": AI_KEY})
+    text = visible(result)
+    assert result.returncode == 0, text
+    assert_no_secret(result, world)
+    assert "2 model tersedia" in text and "model-gambar" in text and "BERHASIL. Jawaban: siap" in text
+    no_key = run(world, tmp_path, {"action": "ai-probe", "token": "", "value": world.base + "/ai/v1"})
+    assert no_key.returncode == 1 and "AI_API_KEY belum diisi" in visible(no_key)
+    bad_url = run(world, tmp_path, {"action": "ai-probe", "token": "", "value": "ftp://x"},
+                  extra_env={"SECRET_ENV_AI_API_KEY": AI_KEY})
+    assert bad_url.returncode == 1

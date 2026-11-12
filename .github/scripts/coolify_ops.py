@@ -28,7 +28,7 @@ DEFAULT_URL = "http://103.127.96.32:8000"
 DEFAULT_APP_UUID = "x43jcxgopn0ec7h5acs71bbw"
 DEFAULT_APP_URL = "http://x43jcxgopn0ec7h5acs71bbw.103.127.96.32.sslip.io"
 
-READ_ONLY = {"status", "db-logs", "app-logs", "deploy-logs"}
+READ_ONLY = {"status", "db-logs", "app-logs", "deploy-logs", "ai-probe"}
 MUTATING = {"db-restart", "db-private", "db-public", "deploy", "env-set", "app-set"}
 
 # Env vars whose values are not secret; everything else is masked by default.
@@ -63,6 +63,9 @@ def now() -> float:
 def pause(seconds: float) -> None:
     time.sleep(seconds * _TIME_SCALE)
 
+
+# Repository secrets the workflow hands over as SECRET_ENV_<NAME>, for env-set and ai-probe.
+SECRET_ENV_PREFIX = "SECRET_ENV_"
 
 UUID_LIKE = re.compile(r"[A-Za-z0-9][A-Za-z0-9\-]{5,62}")
 
@@ -127,8 +130,21 @@ def scrub(text, hide_ips: bool = False) -> str:
         text = pattern.sub(replacement, text)
     if hide_ips:
         keep = CFG.get("server_host", "")
-        text = _IPV4.sub(lambda m: m.group(0) if m.group(0) in (keep, "127.0.0.1", "0.0.0.0") else "<ip>", text)
+        text = _IPV4.sub(lambda m: m.group(0) if m.group(0) == keep or is_private_ip(m.group(0)) else "<ip>", text)
     return text
+
+
+def is_private_ip(address: str) -> bool:
+    """Loopback, RFC 1918, link-local and CGNAT ranges: container and host-internal addresses."""
+    try:
+        octets = [int(part) for part in address.split(".")]
+    except ValueError:
+        return False
+    if len(octets) != 4 or any(octet > 255 for octet in octets):
+        return False
+    first, second = octets[0], octets[1]
+    return (first in (0, 10, 127) or (first == 172 and 16 <= second <= 31) or (first == 192 and second == 168)
+            or (first == 169 and second == 254) or (first == 100 and 64 <= second <= 127))
 
 
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f\x1b]")
@@ -494,6 +510,16 @@ def act_status(inputs: dict) -> None:
     else:
         out(f"  tidak terbaca: {explain(status, application)}")
 
+    section("Semua resource di panel")
+    status, resources = api("GET", "/resources")
+    if status == 200 and isinstance(resources, list):
+        register_secrets(resources)
+        for resource in resources:
+            if isinstance(resource, dict):
+                out(f"  - {fields(resource, ['name', 'type', 'status', 'fqdn'])}")
+    else:
+        out(f"  tidak terbaca: {explain(status, resources)}")
+
     section("Deploy terakhir")
     for deployment in list_deployments():
         message = str(deployment.get("commit_message") or "").splitlines()[0][:70] if deployment.get("commit_message") else ""
@@ -566,7 +592,7 @@ def act_db_logs(inputs: dict) -> None:
     raw = payload.get("logs") if isinstance(payload, dict) else payload
     lines = [line for line in str(raw or "").splitlines() if line.strip()]
     rendered, counts, last_count, refused, first_stamp, last_stamp = [], {}, None, 0, "", ""
-    highlights = []
+    highlights, accepted, ended, refused_from, clients = [], {}, {}, {}, {}
     for line in lines:
         text, record = render_mongo_line(line)
         rendered.append(text)
@@ -581,8 +607,20 @@ def act_db_logs(inputs: dict) -> None:
         if isinstance(attr.get("connectionCount"), int):
             last_count = attr["connectionCount"]
         message = str(record.get("msg", "")).lower()
+        host = str(attr.get("remote") or "").rsplit(":", 1)[0]
         if "too many open connections" in message:
             refused += 1
+            refused_from[host] = refused_from.get(host, 0) + 1
+        elif message == "connection accepted":
+            accepted[host] = accepted.get(host, 0) + 1
+        elif message == "connection ended":
+            ended[host] = ended.get(host, 0) + 1
+        elif message == "client metadata":
+            doc = attr.get("doc") if isinstance(attr.get("doc"), dict) else {}
+            driver = doc.get("driver") if isinstance(doc.get("driver"), dict) else {}
+            application = doc.get("application") if isinstance(doc.get("application"), dict) else {}
+            who = (host, str(driver.get("name") or "?")[:40], str(application.get("name") or "-")[:40])
+            clients[who] = clients.get(who, 0) + 1
         if record.get("s") in ("E", "F", "W") or any(word in message for word in (
                 "starting", "rlimit", "shutting down", "shutdown", "too many", "build info", "out of", "no space",
                 "disk", "waiting for connections", "interrupted", "wiredtiger message")):
@@ -591,6 +629,15 @@ def act_db_logs(inputs: dict) -> None:
     out(f"  Rentang waktu: {first_stamp} s.d. {last_stamp}")
     out(f"  connectionCount terakhir yang tercatat: {last_count}")
     out(f"  Baris 'too many open connections': {refused}")
+    section("Siapa yang membuka koneksi (alamat asal: diterima / selesai / ditolak karena penuh)")
+    hosts = sorted(set(accepted) | set(ended) | set(refused_from),
+                   key=lambda h: -(accepted.get(h, 0) + refused_from.get(h, 0)))
+    for host in hosts[:12]:
+        out(f"  {host or '(tidak tercatat)'}: {accepted.get(host, 0)} / {ended.get(host, 0)} / {refused_from.get(host, 0)}",
+            hide_ips=True)
+    section("Jenis klien (alamat asal, driver, nama aplikasi)")
+    for who, count in sorted(clients.items(), key=lambda item: -item[1])[:12]:
+        out(f"  {count:>6}x  {who[0]} | {who[1]} | {who[2]}", hide_ips=True)
     section("Jenis pesan terbanyak")
     for key, count in sorted(counts.items(), key=lambda item: -item[1])[:18]:
         out(f"  {count:>6}x  {' '.join(key)}")
@@ -656,9 +703,17 @@ def act_db_restart(inputs: dict) -> None:
     database = find_database(inputs)
     uuid = database["uuid"]
     show_databases([database])
-    if database.get("enable_ssl") and inputs.get("force", "").strip().lower() != "ya":
+    forced = inputs.get("force", "").strip().lower() == "ya"
+    if database.get("enable_ssl") and not forced:
         fail("enable_ssl aktif pada database. Restart bisa mengubah cara aplikasi harus tersambung; "
              "jalankan lagi dengan force=ya bila memang dikehendaki.")
+    # Coolify's restart removes the container, pulls the image again and recreates it. A floating tag
+    # could therefore bring a different MongoDB major version, which may refuse the existing data files.
+    image = str(database.get("image") or "")
+    tag = image.rsplit(":", 1)[1] if ":" in image.rsplit("/", 1)[-1] else "latest"
+    if not re.match(r"\d", tag) and not forced:
+        fail(f"Image database memakai tag mengambang ({tag}). Restart menarik ulang image dan bisa mengganti versi "
+             "MongoDB; jalankan lagi dengan force=ya bila memang dikehendaki.")
     port = int(database["public_port"]) if database.get("is_public") and database.get("public_port") else None
     section("Sebelum restart")
     if port:
@@ -673,8 +728,8 @@ def act_db_restart(inputs: dict) -> None:
     section("Restart diminta")
     out(f"  Jawaban Coolify: {reason(payload)}")
 
-    started, streak, success, saw_dip = now(), 0, False, False
-    while now() - started < 360:
+    started, streak, success, saw_dip, nudged = now(), 0, False, False, False
+    while now() - started < 480:
         pause(10)
         elapsed = int(now() - started)
         status, current = api("GET", f"/databases/{uuid}")
@@ -695,6 +750,12 @@ def act_db_restart(inputs: dict) -> None:
         if streak >= 2 and elapsed >= 20:
             success = True
             break
+        if not nudged and elapsed >= 180 and not str(db_status).startswith("running"):
+            # Coolify removes the container before a queued job starts it again; if that job failed
+            # (for example the image pull), the database stays down until it is started explicitly.
+            nudged = True
+            status, payload = api_post_or_get(f"/databases/{uuid}/start")
+            out(f"  Database belum hidup setelah 3 menit; perintah start dikirim: {explain(status, payload)}")
     section("Sesudah restart")
     status, current = api("GET", f"/databases/{uuid}")
     if status == 200 and isinstance(current, dict):
@@ -703,7 +764,7 @@ def act_db_restart(inputs: dict) -> None:
     code, text = app_health()
     out(f"  Aplikasi /api/health: HTTP {code} {text}")
     if not success:
-        fail("Database belum terbukti menerima koneksi baru dalam 6 menit. Periksa db-logs.")
+        fail("Database belum terbukti menerima koneksi baru dalam 8 menit. Periksa db-logs dan status.")
     out("  BERHASIL: database menerima koneksi baru.")
 
 
@@ -715,7 +776,11 @@ def act_db_visibility(inputs: dict, public: bool) -> None:
         out(f"  Sudah {'publik' if public else 'tertutup'}; tidak ada yang diubah.")
         return
     port = int(database["public_port"]) if database.get("public_port") else None
-    status, payload = api("PATCH", f"/databases/{uuid}", body={"is_public": public})
+    if public and not port:
+        fail("Database belum punya public_port; atur dulu di panel Coolify.")
+    # Coolify starts the proxy immediately only when public_port is part of the request.
+    reopen = {"is_public": True, "public_port": port}
+    status, payload = api("PATCH", f"/databases/{uuid}", body=reopen if public else {"is_public": False})
     if status not in (200, 201):
         fail(f"Perubahan is_public ditolak: {explain(status, payload)}")
     pause(8)
@@ -732,13 +797,18 @@ def act_db_visibility(inputs: dict, public: bool) -> None:
             fail("Port publik masih menjawab dari internet.")
     code, text = app_health_retry()
     out(f"  Aplikasi /api/health: HTTP {code} {text}")
+    if code != 200 and not public and inputs.get("force", "").strip().lower() == "ya":
+        out("  Aplikasi kehilangan database setelah port ditutup (container lama memakai alamat publik).")
+        out("  force=ya: port TETAP ditutup. Jalankan db-restart lalu deploy agar versi baru tersambung lewat jaringan internal.")
+        return
     if code != 200 and not public:
         out("  Aplikasi kehilangan database setelah port ditutup: container yang berjalan masih memakai alamat publik.")
-        status, payload = api("PATCH", f"/databases/{uuid}", body={"is_public": True})
+        status, payload = api("PATCH", f"/databases/{uuid}", body=reopen)
         pause(10)
         code, text = app_health_retry()
         out(f"  Port publik dibuka lagi (HTTP {status}); aplikasi: HTTP {code} {text}")
-        fail("Penutupan port dibatalkan. Deploy dulu versi yang memakai MONGO_URL internal, baru tutup port.")
+        fail("Penutupan port dibatalkan. Deploy dulu versi yang memakai MONGO_URL internal, baru tutup port "
+             "(atau jalankan lagi dengan force=ya untuk menutupnya tanpa pembatalan).")
     if code != 200:
         fail("Aplikasi tidak sehat setelah perubahan.")
 
@@ -823,6 +893,12 @@ def act_env_set(inputs: dict) -> None:
         pairs[inputs["key"].strip()] = inputs.get("value", "")
     if not pairs:
         fail("Isi key dan value, atau envs_json.")
+    for key in list(pairs):
+        if not pairs[key]:
+            # An empty value means: take it from the repository secret of the same name.
+            pairs[key] = os.environ.get(SECRET_ENV_PREFIX + key, "")
+            if not pairs[key]:
+                fail(f"Nilai {key[:40]} kosong dan secret GitHub bernama {key[:40]} belum diisi.")
     for key, value in pairs.items():
         if key not in NON_SECRET_ENV:
             mask(value, force=True)
@@ -863,7 +939,44 @@ def act_app_set(inputs: dict) -> None:
                                         "health_check_retries", "health_check_start_period"]))
 
 
+def act_ai_probe(inputs: dict) -> None:
+    """List models of an OpenAI-compatible provider and send one tiny chat request. Needs no Coolify token."""
+    key = os.environ.get(SECRET_ENV_PREFIX + "AI_API_KEY", "")
+    if not key:
+        fail("Secret GitHub AI_API_KEY belum diisi.")
+    base = inputs.get("value", "").strip().rstrip("/")
+    parts = urllib.parse.urlsplit(base)
+    if parts.scheme not in ("http", "https") or not parts.hostname or parts.username or parts.password:
+        fail("Isi value dengan alamat dasar penyedia, contoh https://nama-host/v1")
+    section("Daftar model")
+    status, payload = http("GET", base + "/models", token=key, timeout=40)
+    models = []
+    if status == 200 and isinstance(payload, dict) and isinstance(payload.get("data"), list):
+        models = [str(m.get("id")) for m in payload["data"] if isinstance(m, dict) and m.get("id")]
+        out(f"  {len(models)} model tersedia:")
+        for name in models[:80]:
+            out(f"    {name[:80]}")
+    else:
+        out(f"  GET /models gagal: {explain(status, payload)}")
+    model = inputs.get("key", "").strip() or (models[0] if models else "")
+    if not model:
+        fail("Tidak ada model untuk diuji. Isi key dengan nama model.")
+    section(f"Uji chat dengan model {model[:80]}")
+    body = {"model": model, "max_tokens": 16, "messages": [{"role": "user", "content": "Balas satu kata: siap"}]}
+    status, payload = http("POST", base + "/chat/completions", body=body, token=key, timeout=90)
+    answer = ""
+    if status == 200 and isinstance(payload, dict) and isinstance(payload.get("choices"), list) and payload["choices"]:
+        first = payload["choices"][0]
+        message = first.get("message") if isinstance(first, dict) else None
+        answer = str((message or {}).get("content") or "")
+    if not answer:
+        fail(f"Chat gagal: {explain(status, payload)}")
+    out(f"  BERHASIL. Jawaban: {answer[:80]}")
+    out(f"  Pakai: AI_BASE_URL={base} dan AI_MODEL={model[:80]}")
+
+
 ACTIONS = {
+    "ai-probe": act_ai_probe,
     "status": act_status,
     "db-logs": act_db_logs,
     "app-logs": act_app_logs,
@@ -882,6 +995,9 @@ def main() -> None:
     token = (os.environ.get("COOLIFY_TOKEN_SECRET") or "").strip() or inputs.get("token", "").strip()
     if token:
         mask(token, force=True)
+    for name, value in os.environ.items():
+        if name.startswith(SECRET_ENV_PREFIX) and value:
+            mask(value, force=True)
     action = inputs.get("action", "").strip() or "status"
     if action == "env-set":
         # Register the new values before anything else can be printed.
@@ -919,7 +1035,7 @@ def main() -> None:
         fail("UUID aplikasi tidak sah.")
     out(f"Perintah: {action}")
     probe_panel()
-    if not token:
+    if not token and action != "ai-probe":
         fail("Token API Coolify belum diberikan (secret COOLIFY_TOKEN atau input token).")
     if action in MUTATING and inputs.get("confirm", "").strip().lower() != "ya":
         fail(f"Perintah {action} mengubah server. Isi input confirm dengan: ya")
