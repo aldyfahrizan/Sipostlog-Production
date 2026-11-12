@@ -54,6 +54,8 @@ class World:
         self.deploy_result = "finished"
         self.running_deployment = False
         self.strip_sensitive = False     # token without read:sensitive: Coolify omits the values
+        self.ai_requests = []
+        self.ai_needs_completion_tokens = False
         self.envs = [
             {"key": "MONGO_URL", "value": MONGO_URL, "real_value": MONGO_URL, "is_literal": True, "is_runtime": True},
             {"key": "DB_NAME", "value": "sipostlog", "real_value": "sipostlog"},
@@ -156,9 +158,25 @@ def make_handler(world: World):
                 if self.headers.get("Authorization") != f"Bearer {AI_KEY}":
                     return self.send(401, {"error": {"message": "Invalid API key"}})
                 if path == "/ai/v1/models":
-                    return self.send(200, {"data": [{"id": "model-teks"}, {"id": "model-gambar"}]})
+                    return self.send(200, {"data": [{"id": "text-embedding-kecil"}, {"id": "model-teks"},
+                                                    {"id": "model-gambar"}]})
                 if path == "/ai/v1/chat/completions":
+                    world.ai_requests.append(body)
+                    if "max_tokens" in body and world.ai_needs_completion_tokens:
+                        return self.send(400, {"error": {"message": "Unsupported parameter: max_tokens"}})
+                    content = body["messages"][0]["content"]
+                    if isinstance(content, list):
+                        return self.send(200, {"choices": [{"message": {"content": [{"type": "text", "text": "Merah."}]}}]})
                     return self.send(200, {"choices": [{"message": {"content": "siap"}}], "model": body.get("model")})
+            if path.startswith("/ai/"):
+                if path == "/ai/models":
+                    return self.send(200, "<html>halaman depan</html>", text=True)
+                if path == "/ai/redirect/models":
+                    self.send_response(302)
+                    self.send_header("Location", world.base + "/ai/v1/models")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return None
             if not path.startswith("/api/v1/"):
                 return self.send(404, {"message": "Not found."})
             if self.headers.get("Authorization") != f"Bearer {TOKEN}":
@@ -488,7 +506,9 @@ def test_ai_probe_lists_models_and_chats_without_coolify_token(world, tmp_path):
     text = visible(result)
     assert result.returncode == 0, text
     assert_no_secret(result, world)
-    assert "2 model tersedia" in text and "model-gambar" in text and "BERHASIL. Jawaban: siap" in text
+    assert "3 model tersedia" in text and "model-gambar" in text and "Jawaban: siap" in text
+    assert "Uji teks: model-teks" in text                      # the embedding model is skipped
+    assert "BISA membaca gambar" in text and "AI_VISION_MODEL=model-teks" in text
     no_key = run(world, tmp_path, {"action": "ai-probe", "token": "", "value": world.base + "/ai/v1"})
     assert no_key.returncode == 1 and "AI_API_KEY belum diisi" in visible(no_key)
     bad_url = run(world, tmp_path, {"action": "ai-probe", "token": "", "value": "ftp://x"},
@@ -511,3 +531,28 @@ def test_logs_are_refused_when_token_cannot_see_secret_values(world, tmp_path):
 def test_post_error_is_not_hidden_by_get_fallback(world, tmp_path):
     result = run(world, tmp_path, {"action": "db-restart", "confirm": "ya", "value": "db-does-not-exist"})
     assert result.returncode == 1 and "Butuh tepat satu database" in visible(result)
+
+
+def test_ai_probe_finds_the_v1_base_and_adapts_to_completion_tokens(world, tmp_path):
+    world.ai_needs_completion_tokens = True
+    result = run(world, tmp_path, {"action": "ai-probe", "token": "", "value": world.base + "/ai"},
+                 extra_env={"SECRET_ENV_AI_API_KEY": AI_KEY})
+    text = visible(result)
+    assert result.returncode == 0, text
+    assert_no_secret(result, world)
+    assert f"AI_BASE_URL={world.base}/ai/v1" in text
+    assert any("max_completion_tokens" in body for body in world.ai_requests)
+
+
+def test_authorization_header_never_follows_a_redirect(world, tmp_path):
+    result = run(world, tmp_path, {"action": "ai-probe", "token": "", "value": world.base + "/ai/redirect"},
+                 extra_env={"SECRET_ENV_AI_API_KEY": AI_KEY})
+    text = visible(result)
+    assert "HTTP 302" in text and result.returncode == 1
+    assert not world.ai_requests                                # nothing was sent on to the redirect target
+
+
+def test_ai_probe_refuses_plain_http_to_other_hosts(world, tmp_path):
+    result = run(world, tmp_path, {"action": "ai-probe", "token": "", "value": "http://contoh.example/v1"},
+                 extra_env={"SECRET_ENV_AI_API_KEY": AI_KEY})
+    assert result.returncode == 1 and "https" in visible(result)

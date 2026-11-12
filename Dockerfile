@@ -40,7 +40,10 @@ USER appuser
 
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
+# Coolify memakai angka ini untuk menunggu container baru: tidur selama start-period, lalu
+# memeriksa `retries` kali tiap `interval`. 20s + 24 x 10s memberi waktu bagi startup yang
+# mencoba ulang database (±170 detik) tanpa memperlambat deploy yang normal.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=24 \
     CMD python -c "import os,urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"PORT\",\"8000\")}/api/health', timeout=4)"
 
 CMD ["python", "serve.py"]

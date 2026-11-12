@@ -12,6 +12,7 @@ Hanya pustaka standar Python.
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -23,6 +24,7 @@ import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 
 DEFAULT_URL = "http://103.127.96.32:8000"
 DEFAULT_APP_UUID = "x43jcxgopn0ec7h5acs71bbw"
@@ -192,6 +194,16 @@ def load_inputs() -> dict:
 
 
 # ---------- HTTP ----------
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """urllib forwards the Authorization header on redirects; a token must never follow one."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102, PLR0913
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def http(method: str, url: str, body=None, token: str | None = None, timeout: int = 30):
     """Returns (status, parsed JSON or text). Status 0 means the request never got an answer."""
     data = json.dumps(body).encode() if body is not None else None
@@ -202,7 +214,7 @@ def http(method: str, url: str, body=None, token: str | None = None, timeout: in
     if token:
         request.add_header("Authorization", f"Bearer {token}")
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _OPENER.open(request, timeout=timeout) as response:
             status, raw = response.status, response.read()
     except urllib.error.HTTPError as error:
         status, raw = error.code, error.read()
@@ -937,40 +949,95 @@ def act_app_set(inputs: dict) -> None:
                                         "health_check_retries", "health_check_start_period"]))
 
 
+NOT_CHAT_MODEL = re.compile(r"(?i)embed|tts|whisper|audio|speech|moderation|rerank|dall-e|image|sora|video")
+
+
+def _solid_png(red: int, green: int, blue: int, size: int = 64) -> bytes:
+    """A small one-colour PNG, built by hand so the script needs no imaging library."""
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    row = b"\x00" + bytes((red, green, blue)) * size
+    header = struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(row * size)) + chunk(b"IEND", b"")
+
+
+def _chat(base: str, key: str, model: str, content, limit: int = 256) -> tuple[str, str]:
+    """One chat request. Returns (answer, problem); exactly one of them is empty."""
+    body = {"model": model, "max_tokens": limit, "messages": [{"role": "user", "content": content}]}
+    status, payload = http("POST", base + "/chat/completions", body=body, token=key, timeout=120)
+    if status == 400 and re.search(r"(?i)max_tokens|max_completion_tokens|unsupported", reason(payload)):
+        body["max_completion_tokens"] = body.pop("max_tokens")
+        status, payload = http("POST", base + "/chat/completions", body=body, token=key, timeout=120)
+    if status != 200 or not isinstance(payload, dict):
+        return "", explain(status, payload)
+    if payload.get("error"):
+        error = payload["error"]
+        return "", f"HTTP 200 berisi galat: {reason(error if isinstance(error, dict) else {'message': error})}"
+    choices = payload.get("choices")
+    first = choices[0] if isinstance(choices, list) and choices and isinstance(choices[0], dict) else {}
+    answer = (first.get("message") or {}).get("content") if isinstance(first.get("message"), dict) else ""
+    if isinstance(answer, list):
+        answer = " ".join(str(part.get("text", "")) for part in answer if isinstance(part, dict))
+    answer = str(answer or "").strip()
+    return (answer, "") if answer else ("", "jawaban kosong")
+
+
 def act_ai_probe(inputs: dict) -> None:
-    """List models of an OpenAI-compatible provider and send one tiny chat request. Needs no Coolify token."""
+    """Find out what an OpenAI-compatible provider offers. Needs no Coolify token."""
     key = os.environ.get(SECRET_ENV_PREFIX + "AI_API_KEY", "")
     if not key:
         fail("Secret GitHub AI_API_KEY belum diisi.")
     base = inputs.get("value", "").strip().rstrip("/")
     parts = urllib.parse.urlsplit(base)
-    if parts.scheme not in ("http", "https") or not parts.hostname or parts.username or parts.password:
-        fail("Isi value dengan alamat dasar penyedia, contoh https://nama-host/v1")
+    local = parts.hostname in ("127.0.0.1", "localhost")
+    if not parts.hostname or parts.username or parts.password or not (parts.scheme == "https" or (parts.scheme == "http" and local)):
+        fail("Isi value dengan alamat dasar penyedia yang memakai https, contoh https://nama-host/v1")
+
     section("Daftar model")
-    status, payload = http("GET", base + "/models", token=key, timeout=40)
     models = []
-    if status == 200 and isinstance(payload, dict) and isinstance(payload.get("data"), list):
-        models = [str(m.get("id")) for m in payload["data"] if isinstance(m, dict) and m.get("id")]
-        out(f"  {len(models)} model tersedia:")
-        for name in models[:80]:
-            out(f"    {name[:80]}")
-    else:
-        out(f"  GET /models gagal: {explain(status, payload)}")
-    model = inputs.get("key", "").strip() or (models[0] if models else "")
-    if not model:
+    for candidate in (base, base + "/v1"):
+        status, payload = http("GET", candidate + "/models", token=key, timeout=40)
+        if status == 200 and isinstance(payload, dict) and isinstance(payload.get("data"), list):
+            base = candidate
+            models = [str(m.get("id")) for m in payload["data"] if isinstance(m, dict) and m.get("id")]
+            break
+        out(f"  GET {candidate}/models gagal: {explain(status, payload)}")
+    out(f"  Alamat dasar yang menjawab: {base}")
+    out(f"  {len(models)} model tersedia:")
+    for name in models[:100]:
+        out(f"    {name[:80]}")
+
+    wanted = inputs.get("key", "").strip()
+    candidates = [wanted] if wanted else [m for m in models if not NOT_CHAT_MODEL.search(m)][:3]
+    if not candidates:
         fail("Tidak ada model untuk diuji. Isi key dengan nama model.")
-    section(f"Uji chat dengan model {model[:80]}")
-    body = {"model": model, "max_tokens": 16, "messages": [{"role": "user", "content": "Balas satu kata: siap"}]}
-    status, payload = http("POST", base + "/chat/completions", body=body, token=key, timeout=90)
-    answer = ""
-    if status == 200 and isinstance(payload, dict) and isinstance(payload.get("choices"), list) and payload["choices"]:
-        first = payload["choices"][0]
-        message = first.get("message") if isinstance(first, dict) else None
-        answer = str((message or {}).get("content") or "")
-    if not answer:
-        fail(f"Chat gagal: {explain(status, payload)}")
-    out(f"  BERHASIL. Jawaban: {answer[:80]}")
-    out(f"  Pakai: AI_BASE_URL={base} dan AI_MODEL={model[:80]}")
+    chosen = ""
+    for model in candidates:
+        section(f"Uji teks: {model[:80]}")
+        started = now()
+        answer, problem = _chat(base, key, model, "Balas satu kata: siap")
+        if answer:
+            out(f"  BERHASIL ({now() - started:.1f} detik). Jawaban: {answer[:80]}")
+            chosen = model
+            break
+        out(f"  GAGAL: {problem}")
+    if not chosen:
+        fail("Tidak ada model yang menjawab.")
+
+    section(f"Uji gambar: {chosen[:80]}")
+    picture = "data:image/png;base64," + base64.b64encode(_solid_png(220, 30, 30)).decode()
+    answer, problem = _chat(base, key, chosen, [
+        {"type": "text", "text": "Apa warna gambar ini? Jawab satu kata dalam bahasa Indonesia."},
+        {"type": "image_url", "image_url": {"url": picture}},
+    ])
+    sees = bool(re.search(r"(?i)merah|red", answer))
+    out(f"  {'BISA membaca gambar' if sees else 'TIDAK terbukti membaca gambar'}: {(answer or problem)[:80]}")
+
+    section("Pengaturan yang bisa dipakai")
+    out(f"  AI_BASE_URL={base}")
+    out(f"  AI_MODEL={chosen[:80]}")
+    out(f"  AI_VISION_MODEL={chosen[:80] if sees else '(pilih model lain yang bisa membaca gambar)'}")
 
 
 ACTIONS = {

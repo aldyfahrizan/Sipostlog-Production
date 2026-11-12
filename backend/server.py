@@ -41,7 +41,13 @@ from ai_import import router as ai_import_router
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("sipostlog")
 
-client = AsyncIOMotorClient(os.environ["MONGO_URL"], serverSelectionTimeoutMS=10000)
+# Bounded pool and timeouts so a stuck database cannot pin every worker thread, and a name that
+# identifies this application's connections in the mongod log. No idle timeout on purpose: when the
+# database refuses new connections, the ones already open are what keeps the site up.
+client = AsyncIOMotorClient(
+    os.environ["MONGO_URL"], appname="sipostlog-api", maxPoolSize=20, serverSelectionTimeoutMS=10000,
+    connectTimeoutMS=5000, socketTimeoutMS=30000, waitQueueTimeoutMS=10000,
+)
 db = client[os.environ["DB_NAME"]]
 
 app = FastAPI(title="SIPOSTLOG API", version="2.0.0")
@@ -774,7 +780,15 @@ async def ensure_initialized():
         logger.info("Katalog aktif: %d item", await db.items.count_documents({}))
 
 
-STARTUP_DB_ATTEMPTS = int(os.environ.get("STARTUP_DB_ATTEMPTS", "8"))
+def _startup_attempts() -> int:
+    """A blank or malformed STARTUP_DB_ATTEMPTS must not stop the application from starting."""
+    try:
+        return max(1, int(os.environ.get("STARTUP_DB_ATTEMPTS") or 8))
+    except ValueError:
+        return 8
+
+
+STARTUP_DB_ATTEMPTS = _startup_attempts()
 
 
 @app.on_event("startup")
