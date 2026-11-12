@@ -136,17 +136,21 @@ class _Resp:
         return self._body
 
 
-def _fake_http(monkeypatch, responder):
+def _fake_http(monkeypatch, responder, get=None):
     calls = []
 
     class Client:
-        def __init__(self, *a, **k): pass
+        init_kwargs = {}
+        def __init__(self, *a, **k): Client.init_kwargs = k
         async def __aenter__(self): return self
         async def __aexit__(self, *a): return False
         async def post(self, url, headers=None, json=None):
             calls.append({"url": url, "headers": headers, "json": json})
             return responder(url, json)
-        async def get(self, url): raise knowledge.httpx.ConnectError("no network in tests")
+        async def get(self, url, headers=None):
+            if get:
+                return get(url)
+            raise knowledge.httpx.ConnectError("no network in tests")
     monkeypatch.setattr(knowledge.httpx, "AsyncClient", Client)
     return calls
 
@@ -173,3 +177,133 @@ def test_ai_test_reports_upstream_reason(client, monkeypatch):
     _fake_http(monkeypatch, lambda url, body: _Resp(401, {"error": {"message": "Invalid API key"}}))
     r = client.post("/api/sop/ai-test", headers=h("admin")).json()
     assert r["ok"] is False and "Invalid API key" in r["text"]["detail"]
+
+
+# ---------- AI robustness ----------
+class _Html(_Resp):
+    def json(self):
+        raise ValueError("not json")
+
+
+def _custom(monkeypatch, base="https://api.penyedia.example/v1"):
+    monkeypatch.setenv("AI_BASE_URL", base)
+    monkeypatch.setenv("AI_API_KEY", "kunci-rahasia")
+    monkeypatch.setenv("AI_MODEL", "model-teks")
+
+
+def _ok(text="siap"):
+    return _Resp(200, {"choices": [{"message": {"content": text}}]})
+
+
+def test_200_with_error_body_reports_upstream_message(client, monkeypatch):
+    _custom(monkeypatch)
+    _fake_http(monkeypatch, lambda url, body: _Resp(200, {"error": {"message": "Model sedang penuh"}}))
+    r = client.post("/api/sop/ai-test", headers=h("admin")).json()
+    assert r["ok"] is False and "Model sedang penuh" in r["text"]["detail"]
+
+
+def test_200_with_html_body_hints_at_v1(client, monkeypatch):
+    _custom(monkeypatch, "https://api.penyedia.example")
+    _fake_http(monkeypatch, lambda url, body: _Html(200, "<html>Selamat datang</html>"))
+    r = client.post("/api/sop/ai-test", headers=h("admin")).json()
+    assert r["ok"] is False and "/v1" in r["text"]["detail"] and "AI_BASE_URL" in r["text"]["detail"]
+
+
+def test_content_as_list_of_parts_is_joined(client, monkeypatch):
+    _custom(monkeypatch)
+    parts = [{"type": "reasoning", "text": "hmm"}, {"type": "text", "text": "Stok dicatat "}, {"type": "text", "text": "tiap hari."}]
+    _fake_http(monkeypatch, lambda url, body: _Resp(200, {"choices": [{"message": {"content": parts}}]}))
+    r = client.post("/api/sop/ask", headers=h("petugas"), json={"question": "Kapan stok dicatat?"})
+    assert r.status_code == 200, r.text
+    assert r.json()["answer"] == "Stok dicatat tiap hari."
+
+
+def test_retries_once_with_max_completion_tokens(client, monkeypatch):
+    _custom(monkeypatch)
+
+    def responder(url, body):
+        if "max_tokens" in body:
+            return _Resp(400, {"error": {"message": "Unsupported parameter: 'max_tokens'. Use 'max_completion_tokens' instead."}})
+        return _ok("Jawaban")
+    calls = _fake_http(monkeypatch, responder)
+    r = client.post("/api/sop/ask", headers=h("petugas"), json={"question": "Kapan stok dicatat?"})
+    assert r.status_code == 200 and r.json()["answer"] == "Jawaban"
+    assert len(calls) == 2 and calls[1]["json"]["max_completion_tokens"] == 1200 and "max_tokens" not in calls[1]["json"]
+    calls.clear()
+    _fake_http(monkeypatch, lambda url, body: (calls.append(body), _Resp(400, {"error": {"message": "max_tokens is too large"}}))[1])
+    assert client.post("/api/sop/ask", headers=h("petugas"), json={"question": "Kapan stok dicatat?"}).status_code == 503
+    assert len(calls) == 2  # one retry only
+
+
+def test_ai_test_asks_for_512_tokens(client, monkeypatch):
+    _custom(monkeypatch)
+    calls = _fake_http(monkeypatch, lambda url, body: _ok())
+    client.post("/api/sop/ai-test", headers=h("admin"))
+    assert [c["json"]["max_tokens"] for c in calls] == [512, 512]
+
+
+def test_request_timeout_and_overall_deadline(client, monkeypatch):
+    import time as _time
+    monkeypatch.setattr(knowledge, "_model_cache", {"at": 0.0, "models": []})
+    assert knowledge.AI_DEADLINE_SECONDS == 150
+    monkeypatch.setattr(knowledge, "AI_DEADLINE_SECONDS", 0.05)
+
+    def slow(url, body):
+        _time.sleep(0.08)
+        return _Resp(500, {"error": {"message": "lambat"}})
+    calls = _fake_http(monkeypatch, slow)
+    r = client.post("/api/sop/ask", headers=h("petugas"), json={"question": "Kapan stok dicatat?"})
+    assert r.status_code == 503 and len(calls) == 1
+    timeout = knowledge.httpx.AsyncClient.init_kwargs["timeout"]
+    assert timeout.read == 60 and timeout.connect == 10
+
+
+def test_connection_error_stops_fallback(client, monkeypatch):
+    monkeypatch.setattr(knowledge, "_model_cache", {"at": 0.0, "models": []})
+
+    def down(url, body):
+        raise knowledge.httpx.ConnectError("unreachable")
+    calls = _fake_http(monkeypatch, down)
+    r = client.post("/api/sop/ask", headers=h("petugas"), json={"question": "Kapan stok dicatat?"})
+    assert r.status_code == 503 and len(calls) == 1
+
+
+def test_403_lets_fallback_continue_but_401_aborts(client, monkeypatch):
+    monkeypatch.setattr(knowledge, "_model_cache", {"at": 0.0, "models": []})
+    first = knowledge.FALLBACK_FREE_MODELS[0]
+    calls = _fake_http(monkeypatch, lambda url, body: _Resp(403, {"error": {"message": "model terkunci"}})
+                       if body["model"] == first else _ok("Jawaban cadangan"))
+    r = client.post("/api/sop/ask", headers=h("petugas"), json={"question": "Kapan stok dicatat?"})
+    assert r.status_code == 200 and r.json()["answer"] == "Jawaban cadangan" and len(calls) == 2
+    calls = _fake_http(monkeypatch, lambda url, body: _Resp(401, {"error": {"message": "Invalid API key"}}))
+    assert client.post("/api/sop/ask", headers=h("petugas"), json={"question": "Kapan stok dicatat?"}).status_code == 503
+    assert len(calls) == 1
+
+
+def test_staff_get_generic_error_admin_test_keeps_detail(client, monkeypatch):
+    _custom(monkeypatch)
+    _fake_http(monkeypatch, lambda url, body: _Resp(500, {"error": {"message": "rahasia hulu kunci-rahasia"}}))
+    for role in ("petugas", "opname"):
+        r = client.post("/api/sop/ask", headers=h(role), json={"question": "Kapan stok dicatat?"})
+        assert r.status_code == 503 and r.json()["detail"] == "AI sedang tidak bisa dipakai. Hubungi admin."
+
+    def down(url, body):
+        raise knowledge.httpx.ConnectError("unreachable")
+    _fake_http(monkeypatch, down)
+    r = client.post("/api/sop/ask", headers=h("petugas"), json={"question": "Kapan stok dicatat?"})
+    assert "penyedia.example" not in r.text and r.json()["detail"] == "AI sedang tidak bisa dipakai. Hubungi admin."
+    _fake_http(monkeypatch, lambda url, body: _Resp(500, {"error": {"message": "rahasia hulu kunci-rahasia"}}))
+    detail = client.post("/api/sop/ai-test", headers=h("admin")).json()["text"]["detail"]
+    assert "rahasia hulu" in detail and "kunci-rahasia" not in detail
+
+
+def test_google_session_exchange_failures_give_503(client, monkeypatch):
+    message = "Layanan login Google sedang tidak bisa dihubungi. Coba lagi sebentar."
+    replies = [None, lambda url: _Html(200, "<html>"), lambda url: _Resp(200, {"email": "a@x.id"}),
+               lambda url: _Resp(200, {"session_token": "t"}), lambda url: _Resp(200, ["bukan objek"])]
+    for get in replies:
+        _fake_http(monkeypatch, None, get=get)
+        r = client.post("/api/auth/session", json={"session_id": "abc"})
+        assert r.status_code == 503 and r.json()["detail"] == message, r.text
+    _fake_http(monkeypatch, None, get=lambda url: _Resp(403, {}))
+    assert client.post("/api/auth/session", json={"session_id": "abc"}).status_code == 401

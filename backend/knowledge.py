@@ -8,6 +8,7 @@ Config (environment): either AI_BASE_URL + AI_API_KEY + AI_MODEL (+ AI_VISION_MO
 provider, or OPENROUTER_API_KEY (required for answers), OPENROUTER_MODEL (optional; when
 unset the server picks an available ":free" model from OpenRouter's model list).
 """
+import asyncio
 import logging
 import os
 import re
@@ -181,6 +182,10 @@ NOT_CONFIGURED = ("Mesin AI belum diaktifkan. Admin perlu mengisi OPENROUTER_API
                   "(penyedia lain yang kompatibel OpenAI), di pengaturan server lalu Redeploy.")
 
 
+AI_UNAVAILABLE = "AI sedang tidak bisa dipakai. Hubungi admin."
+AI_DEADLINE_SECONDS = 150
+
+
 def _upstream_error(r: httpx.Response) -> str:
     try:
         body = r.json()
@@ -191,13 +196,53 @@ def _upstream_error(r: httpx.Response) -> str:
     return f"HTTP {r.status_code}: {str(text or '')[:160]}"
 
 
-async def ask_openrouter(messages: list[dict], vision: bool = False, max_tokens: int = 1200) -> tuple[str, str]:
-    """Ask the configured provider (name kept for callers); returns (answer, model)."""
+def _answer_text(content) -> str:
+    """Message content is a string, or a list of parts of which only the text parts are the answer."""
+    if isinstance(content, list):
+        content = "".join(p if isinstance(p, str) else str(p.get("text") or "")
+                          for p in content if isinstance(p, str) or (isinstance(p, dict) and p.get("type", "text") in ("text", "output_text")))
+    return str(content or "").strip()
+
+
+def _read_answer(r: httpx.Response, custom: bool) -> tuple[str, str]:
+    """(answer, error) from an HTTP 200 reply; exactly one of them is filled."""
+    try:
+        body = r.json()
+    except ValueError:
+        hint = " AI_BASE_URL kemungkinan harus diakhiri dengan /v1." if custom else ""
+        return "", "penyedia membalas halaman web, bukan data JSON." + hint
+    if isinstance(body, dict) and body.get("error") and not body.get("choices"):
+        return "", f"penyedia menolak permintaan ({_upstream_error(r)})"
+    try:
+        answer = _answer_text(body["choices"][0]["message"]["content"])
+    except (KeyError, IndexError, TypeError, AttributeError):
+        return "", "respons tidak terbaca (penyedia mungkin tidak kompatibel OpenAI)"
+    return answer, "" if answer else "jawaban kosong"
+
+
+def _wants_completion_tokens(r: httpx.Response) -> bool:
+    text = str(getattr(r, "text", "")).lower()
+    return r.status_code == 400 and ("max_tokens" in text or "unsupported parameter" in text or "unsupported_parameter" in text)
+
+
+async def ask_openrouter(messages: list[dict], vision: bool = False, max_tokens: int = 1200, detailed: bool = False) -> tuple[str, str]:
+    """Ask the configured provider (name kept for callers); returns (answer, model).
+
+    Failure reasons name the server address and quote the provider, so only `detailed` callers
+    (the admin test) get them; everyone else gets one plain sentence and the reason goes to the log.
+    """
     cfg = ai_config()
     if cfg["provider"] == "off":
         raise HTTPException(503, NOT_CONFIGURED)
+
+    def fail(reason: str):
+        reason = reason.replace(cfg["key"], "***")
+        logger.warning("AI gagal: %s", reason)
+        raise HTTPException(503, reason if detailed else AI_UNAVAILABLE)
+
     headers = {"Authorization": f"Bearer {cfg['key']}", "X-Title": "SIPOSTLOG BPBD Kabupaten Banjar"}
-    async with httpx.AsyncClient(timeout=90) as client:
+    deadline = time.monotonic() + AI_DEADLINE_SECONDS
+    async with httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10)) as client:
         if cfg["provider"] == "custom":
             model = cfg["vision_model"] if vision else cfg["model"]
             if not model:
@@ -207,27 +252,35 @@ async def ask_openrouter(messages: list[dict], vision: bool = False, max_tokens:
             models = await free_models(client, vision)
         last_error = ""
         for model in models:
+            payload = {"model": model, "messages": messages, "max_tokens": max_tokens}
             try:
-                r = await client.post(f"{cfg['base_url']}/chat/completions", headers=headers,
-                                      json={"model": model, "messages": messages, "max_tokens": max_tokens})
-            except httpx.HTTPError as e:
+                for _ in range(2):
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise asyncio.TimeoutError
+                    r = await asyncio.wait_for(client.post(f"{cfg['base_url']}/chat/completions", headers=headers, json=payload), remaining)
+                    if "max_tokens" not in payload or not _wants_completion_tokens(r):
+                        break
+                    payload["max_completion_tokens"] = payload.pop("max_tokens")
+            except asyncio.TimeoutError:
+                last_error = last_error or f"penyedia tidak menjawab dalam {AI_DEADLINE_SECONDS} detik"
+                break
+            except (httpx.ConnectError, httpx.ConnectTimeout) as e:
                 last_error = f"tidak bisa menghubungi {cfg['base_url']} ({type(e).__name__})"
+                break
+            except httpx.HTTPError as e:
+                last_error = f"sambungan ke {cfg['base_url']} terputus ({type(e).__name__})"
                 continue
-            if r.status_code in (401, 403):
-                raise HTTPException(503, f"Kunci API AI ditolak ({_upstream_error(r)}). Periksa kunci di pengaturan server.")
+            if r.status_code == 401:
+                fail(f"Kunci API AI ditolak ({_upstream_error(r)}). Periksa kunci di pengaturan server.")
             if r.status_code != 200:
                 last_error = _upstream_error(r)
-                logger.warning("AI %s gagal: %s", model, last_error)
+                logger.warning("AI %s gagal: %s", model, last_error.replace(cfg["key"], "***"))
                 continue
-            try:
-                answer = (r.json()["choices"][0]["message"]["content"] or "").strip()
-            except (KeyError, IndexError, ValueError, TypeError):
-                last_error = "respons tidak terbaca (penyedia mungkin tidak kompatibel OpenAI)"
-                continue
+            answer, last_error = _read_answer(r, cfg["provider"] == "custom")
             if answer:
                 return answer, model
-            last_error = "jawaban kosong"
-        raise HTTPException(503, f"Mesin AI tidak menjawab: {last_error}. Coba lagi beberapa saat lagi.")
+        fail(f"Mesin AI tidak menjawab: {last_error}. Coba lagi beberapa saat lagi.")
 
 
 # ---------- endpoints ----------
@@ -283,7 +336,7 @@ async def ai_test(user=Depends(require_role(ROLE_ADMIN))):
             content = [{"type": "text", "text": "Balas dengan satu kata: siap"}, {"type": "image_url", "image_url": {"url":
                        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="}}]
         try:
-            answer, model = await ask_openrouter([{"role": "user", "content": content}], vision=vision, max_tokens=20)
+            answer, model = await ask_openrouter([{"role": "user", "content": content}], vision=vision, max_tokens=512, detailed=True)
             result[label] = {"ok": True, "model": model, "answer": answer[:80]}
         except HTTPException as e:
             result[label] = {"ok": False, "detail": e.detail}
