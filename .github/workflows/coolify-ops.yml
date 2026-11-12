@@ -23,6 +23,9 @@ on:
           - db-restart
           - db-private
           - db-public
+          - db-backup-status
+          - db-backup-enable
+          - db-init
           - deploy
           - env-set
           - app-set

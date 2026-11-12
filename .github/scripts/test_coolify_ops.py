@@ -29,8 +29,10 @@ WEBHOOK_SECRET = "whsec_" + "Q1w2" * 6
 SENTINEL = "sentinel-" + "Ab12" * 8
 SESSION_TOKEN = "sess_" + "Kk77" * 8
 NEW_SECRET_VALUE = "nilai-baru-" + "Rr55" * 6
+BACKUP = "bak1uuid0000000000000001"
+RUN_OPTIONS = "--ulimit nofile=64000:64000 --env RAHASIA=" + "Hh33" * 6
 SECRETS = [TOKEN, DB_PASSWORD, MONGO_URL, ADMIN_HASH, ADMIN_EMAIL, AI_KEY, WEBHOOK_SECRET, SENTINEL, SESSION_TOKEN,
-           NEW_SECRET_VALUE]
+           NEW_SECRET_VALUE, RUN_OPTIONS]
 
 
 def op_msg_reply() -> bytes:
@@ -67,6 +69,11 @@ class World:
         ]
         self.requests = []
         self.mongo_port = 0
+        self.backups = []                # scheduled backup configurations of the database
+        self.executions = []
+        self.backup_polls = 0            # polls left until the first backup run finishes
+        self.backup_result = "success"
+        self.run_options = None          # custom_docker_run_options of the database
 
     def database(self):
         return {
@@ -76,6 +83,7 @@ class World:
             "internal_db_url": MONGO_URL,
             "external_db_url": f"mongodb://root:{DB_PASSWORD}@127.0.0.1:{self.mongo_port}/?directConnection=true",
             "mongo_initdb_root_password": DB_PASSWORD, "mongo_initdb_root_username": "root", "backup_configs": [],
+            "custom_docker_run_options": self.run_options,
         }
 
     def application(self):
@@ -202,6 +210,9 @@ def make_handler(world: World):
                         world.mongo_accepts, world.db_status, world.restart_polls = True, "running:healthy", None
                 return self.send(200, world.database())
             if route == f"/databases/{DB}" and method == "PATCH":
+                if "custom_docker_run_options" in body:
+                    return self.send(422, {"message": "Validation failed.",
+                                           "errors": {"custom_docker_run_options": ["This field is not allowed."]}})
                 world.is_public = bool(body.get("is_public"))
                 return self.send(200, {"message": "Database updated."})
             if route == f"/databases/{DB}/restart":
@@ -209,6 +220,24 @@ def make_handler(world: World):
                     return self.send(405, {"message": "Method not allowed."})
                 world.db_status, world.restart_polls = "restarting", 3
                 return self.send(200, {"message": "Database restarting request queued."})
+            if route == f"/databases/{DB}/backups" and method == "GET":
+                return self.send(200, world.backups)
+            if route == f"/databases/{DB}/backups" and method == "POST":
+                world.backups.append({**body, "uuid": BACKUP, "s3_storage_uuid": None,
+                                      "database": {"internal_db_url": MONGO_URL}})
+                world.executions = [{"uuid": "exec0002", "status": "running", "size": 0, "filename": None,
+                                     "created_at": "2026-11-12T18:00:00Z", "message": None}]
+                world.backup_polls = 3
+                return self.send(201, {"uuid": BACKUP, "message": "Backup configuration created successfully."})
+            if route == f"/databases/{DB}/backups/{BACKUP}/executions":
+                if world.backup_polls:
+                    world.backup_polls -= 1
+                    if not world.backup_polls:
+                        world.executions[0].update({
+                            "status": world.backup_result, "size": 123456,
+                            "filename": "/data/coolify/backups/mongo-dump-1.tar.gz",
+                            "message": f"mongodump --uri={MONGO_URL} selesai"})
+                return self.send(200, {"executions": world.executions})
             if route == f"/databases/{DB}/logs":
                 return self.send(200, {"logs": MONGO_LOG})
             if route == f"/applications/{APP}" and method == "GET":
@@ -556,3 +585,84 @@ def test_ai_probe_refuses_plain_http_to_other_hosts(world, tmp_path):
     result = run(world, tmp_path, {"action": "ai-probe", "token": "", "value": "http://contoh.example/v1"},
                  extra_env={"SECRET_ENV_AI_API_KEY": AI_KEY})
     assert result.returncode == 1 and "https" in visible(result)
+
+
+def existing_backup():
+    return {"uuid": BACKUP, "frequency": "0 18 * * *", "enabled": True, "save_s3": False,
+            "database_backup_retention_amount_locally": 7, "database_backup_retention_max_storage_locally": 1,
+            "s3": {"secret": WEBHOOK_SECRET}, "database": {"internal_db_url": MONGO_URL}}
+
+
+def test_db_backup_status_lists_configs_and_executions(world, tmp_path):
+    world.backups = [existing_backup()]
+    world.executions = [{"uuid": "exec0001", "status": "success", "size": 4096, "created_at": "2026-11-11T18:00:01Z",
+                         "filename": "/data/coolify/backups/mongo-dump-0.tar.gz",
+                         "message": f"mongodump --uri={MONGO_URL} selesai"}]
+    result = run(world, tmp_path, {"action": "db-backup-status"})
+    text = visible(result)
+    assert result.returncode == 0, text
+    assert_no_secret(result, world)
+    assert f"uuid={BACKUP}" in text and "frequency=0 18 * * *" in text and "enabled=True" in text
+    assert "database_backup_retention_amount_locally=7" in text
+    assert "status=success" in text and "size=4096" in text and "mongo-dump-0.tar.gz" in text
+    assert "mongodump" not in text
+    assert all(method == "GET" for method, path, _ in world.requests)
+
+
+def test_db_backup_status_without_config(world, tmp_path):
+    result = run(world, tmp_path, {"action": "db-backup-status"})
+    assert result.returncode == 0, visible(result)
+    assert "Belum ada jadwal backup" in visible(result)
+
+
+def test_db_backup_enable_creates_schedule_and_reports_first_run(world, tmp_path):
+    assert run(world, tmp_path, {"action": "db-backup-enable"}).returncode == 1
+    assert not world.backups
+    result = run(world, tmp_path, {"action": "db-backup-enable", "confirm": "ya"})
+    text = visible(result)
+    assert result.returncode == 0, text
+    assert_no_secret(result, world)
+    posts = [body for method, path, body in world.requests if method == "POST" and path.endswith("/backups")]
+    assert posts == [{"frequency": "0 18 * * *", "enabled": True, "save_s3": False, "backup_now": True,
+                      "database_backup_retention_amount_locally": 7,
+                      "database_backup_retention_max_storage_locally": 1}]
+    assert "status=success" in text and "size=123456" in text and "BERHASIL" in text
+    assert "mongodump" not in text
+
+
+def test_db_backup_enable_changes_nothing_when_schedule_exists(world, tmp_path):
+    world.backups = [existing_backup()]
+    world.executions = [{"uuid": "exec0001", "status": "success", "size": 4096, "created_at": "2026-11-11T18:00:01Z",
+                         "filename": "/data/coolify/backups/mongo-dump-0.tar.gz", "message": None}]
+    result = run(world, tmp_path, {"action": "db-backup-enable", "confirm": "ya"})
+    text = visible(result)
+    assert result.returncode == 0, text
+    assert_no_secret(result, world)
+    assert "tidak ada yang diubah" in text and "status=success" in text
+    assert not [1 for method, path, _ in world.requests if method != "GET"]
+
+
+def test_db_backup_enable_reports_failed_first_run(world, tmp_path):
+    world.backup_result = "failed"
+    result = run(world, tmp_path, {"action": "db-backup-enable", "confirm": "ya"})
+    assert result.returncode == 1
+    assert_no_secret(result, world)
+    assert "status=failed" in visible(result)
+
+
+def test_db_init_explains_panel_step_and_never_patches(world, tmp_path):
+    world.run_options = RUN_OPTIONS
+    result = run(world, tmp_path, {"action": "db-init"})
+    text = visible(result)
+    assert result.returncode == 1
+    assert_no_secret(result, world)
+    assert "panel" in text and "Custom Docker Options" in text and "db-restart" in text
+    assert not [1 for method, path, _ in world.requests if method != "GET"]
+
+
+def test_db_init_passes_once_the_option_is_set(world, tmp_path):
+    world.run_options = RUN_OPTIONS + " --init"
+    result = run(world, tmp_path, {"action": "db-init"})
+    assert result.returncode == 0, visible(result)
+    assert_no_secret(result, world)
+    assert "sudah" in visible(result)
