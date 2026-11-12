@@ -49,10 +49,11 @@ function HeaderForm({ kind, header, set, incidents }) {
   );
 }
 
-export default function AiImportPanel({ kind, title, anchor }) {
+export default function AiImportPanel({ kind, title, anchor, onState }) {
   const [items] = useItems();
   const fileRef = useRef();
   const pick = useRef(0);
+  const edits = useRef(0);
   const [status, setStatus] = useState(null);
   const [incidents, setIncidents] = useState([]);
   const [text, setText] = useState("");
@@ -94,18 +95,19 @@ export default function AiImportPanel({ kind, title, anchor }) {
       const header = { ...emptyHeader, ...data.header };
       if (kind !== "opname" && !header.date) { header.date = witaDateTime().date; filled.push("tanggal"); }
       if (kind === "out" && !header.time) { header.time = witaDateTime().time; filled.push("jam"); }
-      setDraft({ filename: data.filename, model: data.model, read_as: data.read_as, truncated: data.truncated, filled, header, rows: data.rows.map(newRow) });
+      setDraft({ filename: data.filename, model: data.model, read_as: data.read_as, truncated: data.truncated && (data.kept === "akhir" ? "akhir" : "awal"), filled, header, rows: data.rows.map(newRow) });
       setCheck(data); setDirty(filled.length > 0); if (!file) setText("");
     } catch (e) { if (id === pick.current) setError(e.message); } finally { if (id === pick.current) { setBusy(""); if (fileRef.current) fileRef.current.value = ""; } }
   };
 
-  const edit = (fn) => { setDraft((d) => fn(d)); setDirty(true); setChecked(false); };
+  const edit = (fn) => { edits.current += 1; setDraft((d) => fn(d)); setDirty(true); setChecked(false); };
   const setHeader = (key, value) => edit((d) => ({ ...d, header: { ...d.header, [key]: value } }));
   const setRow = (key, patch) => edit((d) => ({ ...d, rows: d.rows.map((r) => (r.key === key ? { ...r, ...patch } : r)) }));
 
   const validate = async () => {
     setBusy("check"); setError("");
-    try { const { data } = await api.post(`/ai-import/${kind}/validate`, payload()); setCheck(data); setDirty(false); }
+    const at = edits.current; // an edit made while the check is running keeps the draft unchecked
+    try { const { data } = await api.post(`/ai-import/${kind}/validate`, payload()); if (at === edits.current) { setCheck(data); setDirty(false); } }
     catch (e) { setError(errorMessage(e)); } finally { setBusy(""); }
   };
 
@@ -119,18 +121,26 @@ export default function AiImportPanel({ kind, title, anchor }) {
   };
 
   // Ctrl+V of a screenshot anywhere in the panel reads it straight away.
+  // Text on the clipboard (also from Excel or Word, which add a picture of it) is pasted as usual.
   const onPaste = (e) => {
+    if (draft || busy || off || [...(e.clipboardData?.types || [])].includes("text/plain")) return;
     const image = [...(e.clipboardData?.files || [])].find((f) => f.type.startsWith("image/"));
     if (image) { e.preventDefault(); read(image); }
   };
 
   const cfg = AI_KINDS[kind];
   const off = !status?.ai_enabled;
+  const hasDraft = !!draft;
+  useEffect(() => { onState?.({ busy: busy !== "", hasDraft }); }, [busy, hasDraft]);
+
+  if (status && !status.kinds.includes(kind)) {
+    return <div id={anchor} className="scroll-mt-24 rounded-lg border border-slate-200 p-3 text-sm text-slate-500" data-testid="ai-no-access">Akun Anda tidak punya izin mencatat {cfg.label}, jadi impor dengan AI tidak tersedia di sini. Hubungi admin bila perlu.</div>;
+  }
   const flagged = !dirty && (check?.rows || []).some((r) => r.warning);
   const canSave = draft && check?.valid && !dirty && busy === "" && (!flagged || checked);
 
   return (
-    <div id={anchor} onPaste={onPaste} data-testid={`ai-panel-${kind}`}>
+    <div id={anchor} onPaste={onPaste} className="scroll-mt-24" data-testid={`ai-panel-${kind}`}>
       {status && off && <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800" data-testid="ai-disabled"><AlertTriangle size={15} className="mt-0.5 shrink-0" />Baca laporan dengan AI belum aktif. Hubungi admin. Sementara itu isi formulir secara manual.</div>}
 
       <Panel title={title || `Baca laporan ${cfg.label} dengan AI`} subtitle={cfg.hint} testId="ai-upload-panel">
@@ -138,19 +148,19 @@ export default function AiImportPanel({ kind, title, anchor }) {
           <div className="grid gap-4 lg:grid-cols-2" aria-busy={busy === "extract"}>
             <div>
               <label className="block text-xs font-semibold text-slate-400" htmlFor={`ai-text-${kind}`}><MessageSquareText size={13} className="mr-1 inline" />Tempel pesan WhatsApp atau ketik laporan</label>
-              <textarea id={`ai-text-${kind}`} rows={7} maxLength={100000} className="field mt-1 text-sm" value={text} onChange={(e) => setText(e.target.value)} disabled={off || busy === "extract"} placeholder={PLACEHOLDER[kind]} data-testid="ai-text-input" />
+              <textarea id={`ai-text-${kind}`} rows={7} maxLength={40000} className="field mt-1 text-sm" value={text} onChange={(e) => setText(e.target.value)} disabled={off || busy === "extract"} placeholder={PLACEHOLDER[kind]} data-testid="ai-text-input" />
               <div className="mt-2 flex flex-wrap items-center gap-3">
                 <button type="button" onClick={() => read(null)} disabled={off || busy !== "" || text.trim().length < 10} className="btn-primary" data-testid="ai-text-submit"><ScanText size={14} /> {busy === "extract" ? "AI sedang membaca…" : "Baca dengan AI"}</button>
                 <span className="text-[11px] text-slate-500">Tangkapan layar bisa langsung ditempel (Ctrl+V) di sini.</span>
               </div>
             </div>
-            <div onClick={() => !off && !busy && fileRef.current?.click()} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); if (e.dataTransfer.files[0]) read(e.dataTransfer.files[0]); }}
+            <button type="button" disabled={off} onClick={() => !busy && fileRef.current?.click()} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); if (e.dataTransfer.files[0]) read(e.dataTransfer.files[0]); }}
               className={`flex flex-col justify-center rounded-xl border-2 border-dashed border-slate-300 p-6 text-center ${off ? "opacity-60" : busy === "extract" ? "cursor-wait" : "cursor-pointer hover:border-amber-brand/60"}`} data-testid="ai-dropzone">
               {busy === "extract" ? <ScanText size={28} className="mx-auto animate-pulse text-amber-brand" /> : <FileUp size={28} className="mx-auto text-amber-brand" />}
-              <div className="mt-3 text-sm font-semibold text-white">{busy === "extract" ? "AI sedang membaca… (bisa sampai 1 menit)" : "Atau tarik berkas ke sini / klik untuk memilih"}</div>
-              <div className="mt-1 text-xs text-slate-500">Tangkapan layar atau foto (.jpg, .png), PDF, Word (.docx), Excel (.xlsx), atau ekspor chat WhatsApp (.txt) · maks. 8 MB · PDF scan dibaca sampai 5 halaman</div>
-              <input ref={fileRef} type="file" accept={ACCEPT} className="hidden" disabled={off || busy === "extract"} onChange={(e) => e.target.files[0] && read(e.target.files[0])} data-testid="ai-file-input" />
-            </div>
+              <span role="status" aria-live="polite" className="mt-3 block text-sm font-semibold text-white">{busy === "extract" ? "AI sedang membaca… (bisa sampai 1 menit)" : "Atau tarik berkas ke sini / klik untuk memilih"}</span>
+              <span className="mt-1 block text-xs text-slate-500">Tangkapan layar atau foto (.jpg, .png), PDF, Word (.docx), Excel (.xlsx), atau ekspor chat WhatsApp (.txt) · maks. 8 MB · PDF scan dibaca sampai 5 halaman</span>
+            </button>
+            <input ref={fileRef} type="file" accept={ACCEPT} className="hidden" tabIndex={-1} disabled={off || busy === "extract"} onChange={(e) => e.target.files[0] && read(e.target.files[0])} data-testid="ai-file-input" />
           </div>
         )}
         <p className="mt-2 text-[11px] text-slate-500">Isi laporan dikirim ke layanan AI pihak ketiga untuk dibaca. Jangan kirim data pribadi penerima bantuan (NIK, nama per orang).</p>
@@ -171,7 +181,7 @@ export default function AiImportPanel({ kind, title, anchor }) {
               <div className="text-sm font-semibold text-white">Hasil baca · <span className="text-slate-400">{draft.filename}</span> <span className="text-xs font-normal text-slate-500">(dibaca sebagai {draft.read_as})</span></div>
               <button onClick={() => { if (window.confirm("Buang hasil baca ini? Semua perbaikan Anda akan hilang.")) reset(); }} className="btn-ghost !py-1 text-xs" data-testid="ai-cancel"><X size={13} /> Buang hasil baca</button>
             </div>
-            <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800"><AlertTriangle size={14} className="mt-0.5 shrink-0" />AI bisa salah membaca, terutama angka pada scan atau foto. Cocokkan setiap baris dengan laporan asli sebelum menyimpan.{draft.truncated && " Laporan sangat panjang: hanya bagian awal yang dibaca."}{draft.filled?.length > 0 && ` Laporan tidak menyebut ${draft.filled.join(" dan ")}: diisi dengan saat ini. Ubah bila perlu, lalu tekan Periksa.`}</div>
+            <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800"><AlertTriangle size={14} className="mt-0.5 shrink-0" />AI bisa salah membaca, terutama angka pada scan atau foto. Cocokkan setiap baris dengan laporan asli sebelum menyimpan.{draft.truncated && ` Laporan sangat panjang: hanya bagian ${draft.truncated} yang dibaca${draft.truncated === "akhir" ? " (pesan terbaru)" : ""}.`}{draft.filled?.length > 0 && ` Laporan tidak menyebut ${draft.filled.join(" dan ")}: diisi dengan saat ini. Ubah bila perlu, lalu tekan Periksa.`}</div>
 
             <HeaderForm kind={kind} header={draft.header} set={setHeader} incidents={incidents} />
             {check?.header_errors?.length > 0 && !dirty && <ul className="space-y-1" data-testid="ai-header-errors">{check.header_errors.map((e) => <li key={e} className="flex items-start gap-2 text-xs text-red-700"><AlertCircle size={13} className="mt-0.5 shrink-0" />{e}</li>)}</ul>}

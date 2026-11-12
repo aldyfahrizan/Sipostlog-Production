@@ -382,9 +382,22 @@ def test_extract_needs_text_or_file_and_caps_pasted_text(client, monkeypatch):
     r = client.post("/api/ai-import/out/extract", headers=h(), data={"text": "x" * (ai_import.MAX_PASTED_CHARS + 1)})
     assert r.status_code == 400 and "terlalu panjang" in r.json()["detail"]
     assert seen == {}  # the AI was never called
-    long = "beras 5 kg\n" * 5000
-    p = client.post("/api/ai-import/out/extract", headers=h(), data={"text": long})
-    assert p.status_code == 200 and p.json()["truncated"] is True and len(seen["text"]) == ai_import.MAX_TEXT_CHARS
+    crlf = "beras 5 kg\r\n" * 3500  # browsers send line breaks as CRLF; they count once
+    p = client.post("/api/ai-import/out/extract", headers=h(), data={"text": crlf})
+    assert p.status_code == 200 and p.json()["truncated"] is False and "\r" not in seen["text"]
+
+
+def test_long_chat_export_keeps_the_newest_messages(client, monkeypatch):
+    seen = fake_ai(monkeypatch, {"header": {}, "rows": []})
+    chat = "".join(f"[01/11 08.{i % 60:02d}] lama {i}\n" for i in range(4000)) + "[05/11 09.12] Lapor: beras 200 kg\n"
+    r = client.post("/api/ai-import/in/extract", headers=h(), files={"file": ("chat.txt", chat.encode())})
+    assert r.status_code == 200 and r.json()["truncated"] is True and r.json()["kept"] == "akhir"
+    assert seen["text"].endswith("beras 200 kg\n") and seen["text"].startswith("[01/11") and len(seen["text"]) <= ai_import.MAX_TEXT_CHARS
+
+
+def test_oversized_request_body_is_refused_before_parsing(client):
+    r = client.post("/api/ai-import/in/extract", headers={**h(), "Content-Length": str(13 * 1024 * 1024)}, data={"text": "beras 5 kg sekian"})
+    assert r.status_code == 413
 
 
 def test_txt_whatsapp_export_is_read_as_text(client, monkeypatch):

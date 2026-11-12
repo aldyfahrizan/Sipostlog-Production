@@ -745,10 +745,19 @@ app.include_router(ai_import_router)
 app.include_router(db_probe_router)
 
 
+MAX_BODY_BYTES = 12 * 1024 * 1024  # largest upload is 8 MB plus form overhead
+
+
 @app.middleware("http")
 async def protect_session_requests(request: Request, call_next):
     await ensure_initialized()
     if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        # Refuse oversized bodies before any form is parsed: form fields are held in memory.
+        length = request.headers.get("content-length")
+        if length is None and "chunked" in request.headers.get("transfer-encoding", "").lower():
+            return JSONResponse(status_code=411, content={"detail": "Ukuran kiriman tidak diketahui."})
+        if length is not None and (not length.isdigit() or int(length) > MAX_BODY_BYTES):
+            return JSONResponse(status_code=413, content={"detail": "Kiriman terlalu besar. Batas unggahan 8 MB."})
         origin = request.headers.get("origin")
         if origin and not origin_allowed(request, origin):
             logger.warning("Origin rejected: %r; configured: %r", origin, ALLOWED_ORIGINS)

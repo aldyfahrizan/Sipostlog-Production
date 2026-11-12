@@ -42,7 +42,7 @@ PASTED_NAME = "Teks ketikan / WhatsApp"
 SOURCES = ["Pengadaan APBD", "Bantuan BNPB", "Bantuan BPBD Provinsi", "Hibah / Donasi", "Pengembalian Posko", "Lainnya"]
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 MAX_TEXT_CHARS = 40_000
-MAX_PASTED_CHARS = 100_000  # longer pasted text is refused; up to MAX_TEXT_CHARS of it is read
+MAX_PASTED_CHARS = MAX_TEXT_CHARS  # longer pasted text is refused, never cut
 MAX_PDF_PAGES = 5
 MAX_IMAGE_PIXELS = 40_000_000
 MAX_PAGE_PIXELS = 12_000_000
@@ -343,18 +343,23 @@ async def extract(kind: str, request: Request, file: UploadFile | None = File(No
         if not images and len(text.strip()) < 10:
             raise HTTPException(400, "Dokumen tidak berisi teks yang bisa dibaca.")
     else:
-        filename, images, text = PASTED_NAME, [], text.replace("\x00", "").strip()
+        filename, images, text = PASTED_NAME, [], text.replace("\r\n", "\n").replace("\x00", "").strip()
         if len(text) > MAX_PASTED_CHARS:
             raise HTTPException(400, "Teks terlalu panjang. Tempel bagian laporan yang memuat daftar barangnya saja.")
         if len(text) < 10:
             raise HTTPException(400, "Tulis atau tempel laporannya dulu (paling sedikit 10 huruf), atau pilih berkas.")
         await knowledge._rate_limit(db, user["user_id"])
     catalog = await db.items.find({}, {"_id": 0, "id": 1, "name": 1, "unit": 1}).sort("id", 1).to_list(500)
+    truncated = len(text) > MAX_TEXT_CHARS
+    if truncated and filename.lower().endswith(".txt"):
+        # A chat export is chronological: the report being recorded is at the end, so keep the tail.
+        text = text[-MAX_TEXT_CHARS:]
+        text = text[text.find("\n") + 1:]
     data, model = await extract_with_ai(kind, catalog, text[:MAX_TEXT_CHARS], images)
     header, rows = normalise_extraction(data, catalog)
     preview = await draft_preview(db, kind, header, rows)
     return {**_public(preview), "filename": filename, "model": model, "read_as": "gambar" if images else "teks",
-            "truncated": len(text) > MAX_TEXT_CHARS}
+            "truncated": truncated, "kept": "akhir" if truncated and filename.lower().endswith(".txt") else "awal"}
 
 
 @router.post("/{kind}/validate")
