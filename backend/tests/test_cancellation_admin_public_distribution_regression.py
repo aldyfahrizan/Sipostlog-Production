@@ -558,7 +558,7 @@ def test_public_distribution_allowlist_cancelled_exclusion_and_validation(admin_
 
     event = next((e for e in dist30.json()["events"] if e["event_id"] == tx["transaction_id"]), None)
     assert event is not None
-    assert set(event.keys()) == {"event_id", "occurred_at", "location", "item_names", "recipient_kk", "recipient_jiwa"}
+    assert set(event.keys()) == {"event_id", "occurred_at", "location", "item_names", "incident_type", "recipient_kk", "recipient_jiwa"}
     assert event["recipient_kk"] is None
     assert event["recipient_jiwa"] == 0
     for banned in ["quantity", "change_quantity", "unit", "notes", "user_name", "beneficiary_name", "stock"]:
