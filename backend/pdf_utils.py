@@ -79,7 +79,7 @@ def _signature_block(printed_by):
     return t
 
 
-def build_pdf_report(report_title, sections, printed_by, landscape_mode=True, generated_at=""):
+def build_pdf_report(report_title, sections, printed_by, landscape_mode=True):
     """sections: list of {title, meta: [(k,v)], headers, rows, col_widths}"""
     buf = BytesIO()
     pagesize = landscape(A4) if landscape_mode else A4

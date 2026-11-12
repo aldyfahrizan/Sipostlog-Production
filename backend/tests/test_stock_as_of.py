@@ -162,6 +162,21 @@ def test_period_reports_state_dates_in_words(client):
         assert period in pdf_text(r.content)
 
 
+def test_period_meta_line_states_dates_in_words(client):
+    seed(client, 80, [])
+    line = "Periode: 1 September 2026 s.d. 30 September 2026"
+    query = "?start=2026-09-01&end=2026-09-30"
+    for path in ("/api/export/distribution", "/api/export/transactions"):
+        r = client.get(path + query, headers=AUTH)
+        assert r.status_code == 200, r.text
+        for ws in load_workbook(io.BytesIO(r.content)).worksheets:
+            assert any(row[0] == line for row in ws.iter_rows(values_only=True)), ws.title
+        r = client.get(path + "/pdf" + query, headers=AUTH)
+        assert r.status_code == 200, r.text
+        text = pdf_text(r.content)
+        assert ": 1 September 2026 s.d. 30 September 2026" in text and "2026-09-01" not in text
+
+
 def test_period_title_states_the_range_the_report_really_holds(client):
     seed(client, 80, [])
     for query, period in (("", "Periode 14 Oktober 2026 s.d. 12 November 2026"),

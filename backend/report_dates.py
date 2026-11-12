@@ -47,6 +47,11 @@ def next_day_start_utc(d: date) -> datetime:
     return datetime(d.year, d.month, d.day, tzinfo=WITA).astimezone(timezone.utc) + timedelta(days=1)
 
 
+def rentang_id(start: date, end: date) -> str:
+    """Value of the "Periode" line: 1 September 2026 s.d. 30 September 2026"""
+    return f"{tanggal_id(start)} s.d. {tanggal_id(end)}"
+
+
 def periode_id(start: date, end: date) -> str:
     """Period of a report in words, from the first and last day the report really holds."""
-    return f"Periode {tanggal_id(start)} s.d. {tanggal_id(end)}"
+    return f"Periode {rentang_id(start, end)}"

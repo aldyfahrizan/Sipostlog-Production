@@ -27,7 +27,7 @@ from auth import (
 from admin_login import AdminLoginBody, UserResponse, admin_password_config_ok, login_admin, seed_local_admin
 from excel_utils import build_opname_template, build_workbook, parse_opname_upload
 from pdf_utils import build_pdf_report
-from report_dates import WITA, dicetak_wita, next_day_start_utc, parse_report_date, periode_id, tanggal_id, today_wita
+from report_dates import WITA, dicetak_wita, next_day_start_utc, parse_report_date, periode_id, rentang_id, tanggal_id, today_wita
 from seed_data import CATALOG_VERSION, DESTINATION_CYCLE, EXPECTED_ITEM_COUNT, INCIDENT_TYPES, INITIAL_ITEMS
 from management import router as management_router
 from public_catalog import router as public_catalog_router
@@ -589,7 +589,7 @@ async def export_stock_pdf(date: Optional[str] = None, user=Depends(require_role
 async def export_distribution(start: Optional[str] = None, end: Optional[str] = None, user=Depends(require_role(*STAFF))):
     data = await dashboard_distribution(start, end, user)
     periode = periode_id(date_type.fromisoformat(data["range"]["start"]), date_type.fromisoformat(data["range"]["end"]))
-    meta = [("Periode", f"{data['range']['start']} s/d {data['range']['end']}"), ("Dicetak", now_wita()), ("Oleh", user["name"] or user["email"])]
+    meta = [("Periode", rentang_id(date_type.fromisoformat(data["range"]["start"]), date_type.fromisoformat(data["range"]["end"]))), ("Dicetak", now_wita()), ("Oleh", user["name"] or user["email"])]
     txs = await db.transactions.find({**ACTIVE_TX, "type": "OUT", "occurred_at": {"$gte": parse_date(data["range"]["start"]), "$lt": parse_date(data["range"]["end"], end=True)}}, {"_id": 0}).sort("occurred_at", -1).to_list(5000)
     content = build_workbook([
         {"name": "Per Item", "title": f"Laporan Penyaluran per Item {periode}", "meta": meta,
@@ -609,7 +609,7 @@ async def export_distribution(start: Optional[str] = None, end: Optional[str] = 
 async def export_distribution_pdf(start: Optional[str] = None, end: Optional[str] = None, user=Depends(require_role(*STAFF))):
     data = await dashboard_distribution(start, end, user)
     periode = periode_id(date_type.fromisoformat(data["range"]["start"]), date_type.fromisoformat(data["range"]["end"]))
-    meta = [("Periode", f"{data['range']['start']} s/d {data['range']['end']}"), ("Dicetak", now_wita())]
+    meta = [("Periode", rentang_id(date_type.fromisoformat(data["range"]["start"]), date_type.fromisoformat(data["range"]["end"]))), ("Dicetak", now_wita())]
     txs = await db.transactions.find({**ACTIVE_TX, "type": "OUT", "occurred_at": {"$gte": parse_date(data["range"]["start"]), "$lt": parse_date(data["range"]["end"], end=True)}}, {"_id": 0}).sort("occurred_at", -1).to_list(5000)
     content = build_pdf_report(
         f"LAPORAN PENYALURAN LOGISTIK BENCANA<br/>{periode}",
@@ -634,7 +634,7 @@ async def export_transactions(start: Optional[str] = None, end: Optional[str] = 
              t.get("source") or t.get("destination") or "", t.get("incident_type", ""), t.get("reason", ""), t["user_name"], t.get("notes", "")] for t in txs]
     content = build_workbook([{
         "name": "Riwayat Transaksi", "title": f"Riwayat Transaksi Stok {periode_id(start_dt.date(), (end_dt - timedelta(days=1)).date())}",
-        "meta": [("Periode", f"{start_dt.strftime('%Y-%m-%d')} s/d {(end_dt - timedelta(days=1)).strftime('%Y-%m-%d')}"), ("Dicetak", now_wita()), ("Oleh", user["name"] or user["email"])],
+        "meta": [("Periode", rentang_id(start_dt.date(), (end_dt - timedelta(days=1)).date())), ("Dicetak", now_wita()), ("Oleh", user["name"] or user["email"])],
         "headers": ["Waktu", "Jenis", "Nama Item", "Stok Sebelum", "Stok Sesudah", "Perubahan", "Satuan", "Sumber / Tujuan", "Jenis Kejadian", "Alasan", "Petugas", "Catatan"],
         "rows": rows,
     }])
@@ -651,7 +651,7 @@ async def export_transactions_pdf(start: Optional[str] = None, end: Optional[str
         f"RIWAYAT TRANSAKSI STOK LOGISTIK<br/>{periode_id(start_dt.date(), (end_dt - timedelta(days=1)).date())}",
         [{
             "title": "Rincian Mutasi Stok",
-            "meta": [("Periode", f"{start_dt.strftime('%Y-%m-%d')} s/d {(end_dt - timedelta(days=1)).strftime('%Y-%m-%d')}"), ("Dicetak", now_wita())],
+            "meta": [("Periode", rentang_id(start_dt.date(), (end_dt - timedelta(days=1)).date())), ("Dicetak", now_wita())],
             "headers": ["Waktu", "Jenis", "Nama Item", "Sebelum", "Sesudah", "Perubahan", "Satuan", "Sumber/Tujuan", "Petugas"],
             "rows": rows,
         }],

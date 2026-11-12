@@ -75,7 +75,7 @@ export default function StockDashboard() {
   return (
     <div data-testid="stock-dashboard">
       <PageHeader eyebrow="Dashboard Internal" title="Dashboard Stok" description={`Posisi stok tahun ${data.year} · ${data.total_items} jenis item logistik.`}
-        actions={<>{toggle}<button onClick={printStock} disabled={printing} className="btn-ghost" data-testid="stock-export-pdf-button"><FileText size={14} /> {printing ? "Mencetak…" : "Cetak PDF"}</button><Link to="/app/barang-masuk" className="btn-ghost" data-testid="quick-stock-in"><ArrowDownToLine size={14} /> Barang Masuk</Link><Link to="/app/catat-penyaluran" className="btn-primary" data-testid="quick-stock-out"><ArrowUpFromLine size={14} /> Catat Penyaluran</Link></>} />
+        actions={<>{toggle}<button onClick={printStock} disabled={printing} className="btn-ghost" data-testid="stock-export-pdf-button"><FileText size={14} /> {printing ? "Mencetak…" : "PDF posisi hari ini"}</button><Link to="/app/barang-masuk" className="btn-ghost" data-testid="quick-stock-in"><ArrowDownToLine size={14} /> Barang Masuk</Link><Link to="/app/catat-penyaluran" className="btn-primary" data-testid="quick-stock-out"><ArrowUpFromLine size={14} /> Catat Penyaluran</Link></>} />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 stagger">
         <StatCard testId="stat-total-items" label="Jenis Item" value={data.total_items} sub="dalam katalog logistik" accent="slate" icon={Package} />
