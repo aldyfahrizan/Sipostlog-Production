@@ -22,7 +22,7 @@ from pymongo.errors import AutoReconnect, BulkWriteError, PyMongoError, ServerSe
 from pydantic import BaseModel, Field
 
 from auth import (
-    ROLE_ADMIN, ROLE_PENDING, ROLE_PETUGAS, ROLE_OPNAME, exchange_session, get_current_user, logout as do_logout, require_role, public_user,
+    ROLE_ADMIN, ROLE_PENDING, ROLE_PETUGAS, ROLE_OPNAME, exchange_session, get_current_user, is_primary_admin, logout as do_logout, require_role, public_user,
 )
 from admin_login import AdminLoginBody, UserResponse, admin_password_config_ok, login_admin, seed_local_admin
 from excel_utils import build_opname_template, build_workbook, parse_opname_upload
@@ -698,6 +698,10 @@ async def patch_user(user_id: str, body: UserPatch, user=Depends(require_role(RO
         raise HTTPException(status_code=400, detail="Tidak ada perubahan")
     if user_id == user["user_id"] and (update.get("role", ROLE_ADMIN) != ROLE_ADMIN or update.get("active") is False):
         raise HTTPException(status_code=400, detail="Tidak dapat mengubah peran/status akun sendiri")
+    if update.get("role", ROLE_ADMIN) != ROLE_ADMIN or update.get("active") is False:
+        current = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+        if current and is_primary_admin(current):
+            raise HTTPException(status_code=409, detail="Admin utama dilindungi: peran dan status aktifnya tidak dapat diubah.")
     target = await db.users.find_one_and_update({"user_id": user_id}, {"$set": update}, projection={"_id": 0}, return_document=ReturnDocument.AFTER)
     if not target:
         raise HTTPException(status_code=404, detail="Pengguna tidak ditemukan")

@@ -11,7 +11,7 @@ from starlette.concurrency import run_in_threadpool
 
 from admin_login import UserResponse
 from account_limits import MAX_USERS, insert_user_with_limit
-from auth import public_user, require_role
+from auth import is_primary_admin, public_user, require_role
 from admin_actions import ReasonBody, ActionResult, audit_record, finalize_cancellation
 from stock_lock import BUSY, held, reserve_stock_with_token
 
@@ -124,7 +124,7 @@ async def reset_password(user_id: str, body: ResetPasswordBody, request: Request
     target = await db.users.find_one({"user_id": user_id, "auth_method": "password"}, {"_id": 0})
     if not target:
         raise HTTPException(404, "Akun lokal tidak ditemukan.")
-    if target.get("username") == "admin":
+    if is_primary_admin(target):
         raise HTTPException(400, "Akun admin utama dikelola melalui konfigurasi; ubah sandi akun petugas melalui menu ini.")
     await db.users.update_one({"user_id": user_id}, {"$set": {"password_hash": await password_hash(body.password)}})
     await db.user_sessions.delete_many({"user_id": user_id})

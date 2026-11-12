@@ -87,20 +87,47 @@ async def seed_local_admin(db):
         await db.user_sessions.delete_many({"user_id": existing["user_id"]})
 
 
+IP_ATTEMPT_LIMIT = 5         # per username + client address
+USERNAME_ATTEMPT_LIMIT = 30  # per username, all addresses together
+ATTEMPT_WINDOW = timedelta(minutes=15)
+
+
+def client_ip(request: Request) -> str:
+    """Client address as resolved by the server (uvicorn applies X-Forwarded-For, see serve.py).
+
+    The header itself is never read here. It is only as trustworthy as the reverse proxy in front,
+    which is why the per-username ceiling does not depend on it.
+    """
+    return request.client.host if request.client else "unknown"
+
+
+async def _count_attempt(db, identifier: str, now: datetime) -> int:
+    await db.login_attempts.delete_many({"identifier": identifier, "expires_at": {"$lte": now}})
+    attempt = await db.login_attempts.find_one_and_update(
+        {"identifier": identifier},
+        {"$inc": {"count": 1}, "$setOnInsert": {"expires_at": now + ATTEMPT_WINDOW}},
+        upsert=True, projection={"_id": 0}, return_document=ReturnDocument.AFTER,
+    )
+    return attempt["count"]
+
+
+def _too_many_attempts() -> HTTPException:
+    return HTTPException(429, "Terlalu banyak percobaan masuk. Coba lagi dalam 15 menit.", headers={"Retry-After": "900"})
+
+
 async def login_admin(body: AdminLoginBody, request: Request, response: Response):
     db = request.app.state.db
     username = body.username.strip().lower()
     now = datetime.now(timezone.utc)
-    # Account-scoped throttling cannot be bypassed by changing proxy IP or forged forwarding headers.
+    # Strict limit per username + client address, so wrong guesses from elsewhere cannot lock the real owner out.
+    # The looser per-username ceiling still bounds guessing spread over many (or forged) addresses.
+    ip_identifier = hashlib.sha256(f"username:{username}|ip:{client_ip(request)}".encode()).hexdigest()
     identifier = hashlib.sha256(f"username:{username}".encode()).hexdigest()
-    await db.login_attempts.delete_many({"identifier": identifier, "expires_at": {"$lte": now}})
-    attempt = await db.login_attempts.find_one_and_update(
-        {"identifier": identifier},
-        {"$inc": {"count": 1}, "$setOnInsert": {"expires_at": now + timedelta(minutes=15)}},
-        upsert=True, projection={"_id": 0}, return_document=ReturnDocument.AFTER,
-    )
-    if attempt["count"] > 5:
-        raise HTTPException(429, "Terlalu banyak percobaan masuk. Coba lagi dalam 15 menit.", headers={"Retry-After": "900"})
+    if await _count_attempt(db, ip_identifier, now) > IP_ATTEMPT_LIMIT:
+        # Not counted against the username: one blocked address must not use up the shared ceiling.
+        raise _too_many_attempts()
+    if await _count_attempt(db, identifier, now) > USERNAME_ATTEMPT_LIMIT:
+        raise _too_many_attempts()
     user = await db.users.find_one({"username": username, "auth_method": "password"}, {"_id": 0})
     password_hash = user.get("password_hash", "") if user else _DUMMY_HASH.decode()
     if user and not bcrypt_hash_is_valid(password_hash):
@@ -112,7 +139,7 @@ async def login_admin(body: AdminLoginBody, request: Request, response: Response
         raise HTTPException(401, "Username atau kata sandi salah.")
     if not user.get("active") or user.get("role") not in ("admin", "petugas", "opname"):
         raise HTTPException(403, "Akun nonaktif atau belum memiliki hak akses.")
-    await db.login_attempts.delete_one({"identifier": identifier})
+    await db.login_attempts.delete_many({"identifier": {"$in": [identifier, ip_identifier]}})
     await db.users.update_one({"user_id": user["user_id"]}, {"$set": {"last_login": now}})
     user["last_login"] = now
     token = secrets.token_urlsafe(32)
