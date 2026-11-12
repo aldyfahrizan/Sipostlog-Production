@@ -27,7 +27,7 @@ export default function HistoryPage() {
     if (!range.start || !range.end) return;
     const controller = new AbortController();
     setRows(null); setError("");
-    api.get("/transactions", { signal: controller.signal, params: { ...range, status, type: type || undefined, item_id: itemId || undefined, batch_id: batchId || undefined, limit: 500 } })
+    api.get("/transactions", { signal: controller.signal, params: { ...range, status, type: type || undefined, item_id: itemId || undefined, batch_id: batchId || undefined, limit: 501 } })
       .then(({ data }) => setRows(data)).catch((err) => { if (!controller.signal.aborted) { setError(errorMessage(err)); setRows([]); } });
     return () => controller.abort();
   }, [range, type, itemId, batchId, status, revision]);
@@ -46,6 +46,6 @@ export default function HistoryPage() {
       {isAdmin && <select aria-label="Status transaksi" value={status} onChange={(event) => setStatus(event.target.value)} className="field !w-auto !py-1.5 text-xs" data-testid="history-status-filter"><option value="active">Aktif</option><option value="cancelled">Dibatalkan</option><option value="all">Semua status</option></select>}
     </div>
     {error && <div role="alert" data-testid="history-load-error" className="mb-4 text-sm text-red-700">{error}<button onClick={() => setRevision((value) => value + 1)} data-testid="history-retry-button" className="btn-ghost ml-3"><RefreshCw size={14} /> Coba lagi</button></div>}
-    <Panel testId="history-table-panel" title={rows ? `${rows.length} transaksi` : "Memuat…"}>{!rows ? <Spinner /> : rows.length === 0 ? <EmptyState text="Tidak ada transaksi pada filter ini." /> : <TransactionTable rows={rows} onCancelled={() => setRevision((value) => value + 1)} />}</Panel>
+    <Panel testId="history-table-panel" title={!rows ? "Memuat…" : rows.length > 500 ? "500+ transaksi" : `${rows.length} transaksi`} subtitle={rows && rows.length > 500 ? "Hanya 500 transaksi terbaru yang ditampilkan. Persempit tanggal atau filter untuk melihat sisanya." : undefined}>{!rows ? <Spinner /> : rows.length === 0 ? <EmptyState text="Tidak ada transaksi pada filter ini." /> : <TransactionTable rows={rows.slice(0, 500)} onCancelled={() => setRevision((value) => value + 1)} />}</Panel>
   </div>;
 }

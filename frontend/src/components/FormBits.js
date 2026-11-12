@@ -14,7 +14,7 @@ export function useItems() {
 export function ItemSelect({ items, value, onChange, testId = "item-select" }) {
   return (
     <div>
-      <label className="label">Item Logistik</label>
+      <label className="label">Barang</label>
       <select className="field" value={value} onChange={(e) => onChange(e.target.value)} data-testid={testId} required>
         <option value="">— Pilih item —</option>
         {items.map((i) => <option key={i.id} value={i.id}>{i.name} · {i.category}</option>)}

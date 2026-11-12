@@ -44,7 +44,7 @@ export default function ExcelPage() {
   };
 
   const upload = async (file) => {
-    if (!file) return;
+    if (!file || busy) return;
     if (!file.name.toLowerCase().endsWith(".xlsx")) { toast.error("Berkas harus .xlsx"); return; }
     setBusy("import"); setImportResult(null);
     const fd = new FormData(); fd.append("file", file);
@@ -72,7 +72,7 @@ export default function ExcelPage() {
       </div>
 
       <div className="mt-8 grid gap-6 lg:grid-cols-[1fr_1fr]">
-        <Panel title="Update Stok via Excel" subtitle="Stock opname massal dalam 3 langkah" testId="excel-import-panel">
+        <Panel title="Perbarui Stok lewat Excel" subtitle="Stock opname massal dalam 3 langkah" testId="excel-import-panel">
           <ol className="space-y-3 text-sm text-slate-300">
             <li className="flex gap-3"><span className="num h-6 w-6 shrink-0 rounded-full bg-amber-brand text-ink-900 font-bold text-xs flex items-center justify-center">1</span><div>Unduh template berisi 37 item dan stok sistem saat ini.<div className="mt-2"><button onClick={() => dl("tpl", "/excel/template")} disabled={busy === "tpl"} className="btn-ghost !py-1.5 text-xs" data-testid="excel-template-button"><FileSpreadsheet size={13} /> Unduh Template Opname</button></div></div></li>
             <li className="flex gap-3"><span className="num h-6 w-6 shrink-0 rounded-full bg-amber-brand text-ink-900 font-bold text-xs flex items-center justify-center">2</span><div>Isi kolom <b className="text-white">Stok Fisik (Isi)</b> di Excel. Kosongkan baris yang tidak berubah. Kolom Keterangan opsional untuk alasan.</div></li>

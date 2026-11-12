@@ -57,9 +57,9 @@ SECTIONS = [
         "title": "Masuk dan Keluar Aplikasi",
         "roles": ALL,
         "steps": [
-            "Buka alamat SIPOSTLOG, lalu klik Masuk.",
+            "Buka alamat SIPOSTLOG, lalu klik tombol Masuk Admin (untuk semua peran).",
             "Isi username dan kata sandi yang diberikan admin, lalu klik Masuk.",
-            "Setelah selesai bekerja, klik Keluar di bagian bawah menu samping, terutama pada komputer bersama.",
+            "Setelah selesai bekerja, klik ikon Keluar (panah keluar) di samping nama Anda di bagian bawah menu samping, terutama pada komputer bersama.",
         ],
         "rules": [
             "Jangan meminjamkan akun. Semua transaksi tercatat atas nama pemilik akun.",
@@ -123,7 +123,7 @@ SECTIONS = [
             "Isi kolom jumlah hanya untuk barang yang ada di BAST; kosongkan barang lain. Jangan mengubah kolom ID Item.",
             "Unggah berkas. Periksa tabel pratinjau: baris berwarna merah menunjukkan kesalahan beserta alasannya.",
             "Bila ada kesalahan, perbaiki berkas Excel lalu unggah ulang. Tombol Simpan baru aktif setelah semua baris benar.",
-            "Klik Simpan. Catat nomor batch yang muncul pada BAST fisik untuk memudahkan pencocokan.",
+            "Klik Simpan. Nomor batch muncul di layar. Tulis nomor itu pada BAST fisik untuk memudahkan pencocokan.",
         ],
         "rules": [
             "Penyimpanan bersifat semua atau tidak sama sekali: tidak ada data yang tersimpan sebagian.",
@@ -158,7 +158,7 @@ SECTIONS = [
         "steps": [
             "Lakukan penghitungan fisik di gudang sesuai jadwal opname.",
             "Koreksi satu barang: buka menu Stock Opname / Koreksi, pilih barang, isi stok fisik hasil hitung dan alasan (wajib), lalu Simpan.",
-            "Koreksi banyak barang: di menu Ekspor & Impor Excel unduh Template Opname, isi kolom Stok Fisik (Isi) untuk barang yang berbeda, lalu unggah kembali.",
+            "Koreksi banyak barang: di menu Ekspor & Impor Excel unduh Template Opname, isi kolom Stok Fisik (Isi) hanya untuk barang yang stok fisiknya berbeda dari Stok Sistem, lalu unggah kembali.",
             "Periksa hasil impor; setiap selisih tercatat sebagai transaksi Koreksi.",
         ],
         "rules": [
@@ -212,7 +212,7 @@ SECTIONS = [
         "roles": ADMIN,
         "steps": [
             "Buka menu Kelola Barang untuk menambah barang baru (nama, kategori, satuan, stok awal, ambang minimum).",
-            "Ubah ambang minimum sesuai kebutuhan siaga; ambang ini menentukan status Menipis.",
+            "Ubah ambang minimum lewat menu Stock Opname / Koreksi (pilih barang, isi Ubah ambang minimum, klik Simpan); ambang ini menentukan status Menipis.",
             "Barang hanya dapat dihapus bila stoknya 0, dengan alasan yang tercatat.",
         ],
     },

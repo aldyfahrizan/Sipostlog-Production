@@ -41,7 +41,7 @@ export default function LoginPage() {
         <p className="mt-4 text-sm leading-relaxed text-slate-600" data-testid="admin-login-app-name">Sistem Informasi Pemantauan Stock Opname Logistik (SIPOSTLOG)</p>
         <form onSubmit={submit} className="mt-8 space-y-5" data-testid="admin-login-form">
           <div>
-            <label htmlFor="admin-username" className="mb-2 block text-sm font-semibold">Username</label>
+            <label htmlFor="admin-username" className="mb-2 block text-sm font-semibold">Nama pengguna</label>
             <div className="relative"><UserRound size={17} className="absolute left-3 top-3.5 text-slate-400" />
               <input id="admin-username" data-testid="admin-username-input" autoComplete="username" autoCapitalize="none" spellCheck={false} required maxLength={64} value={username} onChange={(e) => setUsername(e.target.value)} className="field !pl-10" disabled={busy} />
             </div>
