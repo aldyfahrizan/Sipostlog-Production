@@ -1,0 +1,72 @@
+name: Operasi Coolify
+
+# Menjalankan perintah API Coolify dari runner GitHub: melihat status, membaca log,
+# restart database, menutup port publik database, deploy, dan mengisi variabel.
+#
+# Log repo ini publik. Skrip hanya mencetak kolom yang aman dan menyamarkan nilai rahasia.
+# Token: secret COOLIFY_TOKEN bila ada; kalau tidak, input "token". Input token dan value
+# TIDAK BOLEH dirujuk lewat ekspresi ${{ }} di berkas ini: ekspresi yang sudah diisi
+# tercetak di kepala langkah. Skrip membacanya sendiri dari berkas event.
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Perintah
+        type: choice
+        default: status
+        options:
+          - status
+          - db-logs
+          - app-logs
+          - deploy-logs
+          - db-restart
+          - db-private
+          - db-public
+          - deploy
+          - env-set
+          - app-set
+      token:
+        description: Token API Coolify (kosongkan bila secret COOLIFY_TOKEN sudah diisi)
+        required: false
+      confirm:
+        description: Ketik "ya" untuk perintah yang mengubah server
+        required: false
+      lines:
+        description: Jumlah baris log
+        required: false
+        default: "200"
+      key:
+        description: Nama variabel (env-set) atau pengaturan (app-set)
+        required: false
+      value:
+        description: Nilai untuk key. Untuk deploy-logs = UUID deploy, untuk db-* = UUID database (boleh kosong)
+        required: false
+      envs_json:
+        description: 'Beberapa variabel sekaligus, contoh {"AI_MODEL":"nama-model"}'
+        required: false
+      force:
+        description: Ketik "ya" untuk deploy tanpa cache / melewati pengaman restart
+        required: false
+
+concurrency:
+  group: coolify-ops
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  ops:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Jalankan perintah
+        env:
+          COOLIFY_TOKEN_SECRET: ${{ secrets.COOLIFY_TOKEN }}
+          COOLIFY_URL_SECRET: ${{ secrets.COOLIFY_URL }}
+          PYTHONUNBUFFERED: "1"
+        run: python3 .github/scripts/coolify_ops.py
