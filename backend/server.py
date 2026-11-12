@@ -837,6 +837,19 @@ def _startup_attempts() -> int:
 STARTUP_DB_ATTEMPTS = _startup_attempts()
 
 
+LEASE_SWEEP_SECONDS = 60
+
+
+async def _sweep_leases():
+    """A batch whose holder died shortly before this process started is undone once its lease runs out."""
+    while True:
+        await asyncio.sleep(LEASE_SWEEP_SECONDS)
+        try:
+            await recover_expired(db)
+        except Exception:
+            logger.exception("Pemulihan kunci stok gagal")
+
+
 @app.on_event("startup")
 async def startup():
     # A database that is briefly unreachable (restarting, slow after a VPS reboot)
@@ -855,6 +868,14 @@ async def startup():
             delay = min(delay * 2, 20)
 
 
+@app.on_event("startup")
+async def start_lease_sweeper():  # runs only after the start-up above succeeded
+    app.state.lease_sweeper = asyncio.create_task(_sweep_leases())
+
+
 @app.on_event("shutdown")
 async def shutdown():
+    sweeper = getattr(app.state, "lease_sweeper", None)
+    if sweeper:
+        sweeper.cancel()
     client.close()

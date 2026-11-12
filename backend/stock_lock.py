@@ -18,6 +18,7 @@ BUSY = "Barang sedang diproses, coba lagi sebentar."
 LEASE_LOST = "Proses terlalu lama dan dihentikan. Tidak ada baris yang tersimpan; silakan ulangi."
 NOT_SAVED = "Data gagal disimpan. Tidak ada baris yang tersimpan; silakan coba lagi."
 UNDO_PENDING = "Data gagal disimpan. Baris yang sempat tersimpan dibatalkan otomatis dalam beberapa menit; coba lagi setelah itu."
+UNSURE = "Hasil penyimpanan belum dapat dipastikan. Periksa Riwayat sebelum mengunggah ulang."
 UNFINISHED = ["open", "undoing"]
 _UNLOCK = {"$unset": {"_stock_lock": "", "_stock_lock_until": ""}}
 
@@ -36,13 +37,14 @@ async def undo_batch(db, token: str) -> None:
     journal = await db.stock_journal.find_one_and_update(
         {"token": token, "state": {"$ne": "done"}}, {"$set": {"state": "undoing"}})
     if journal:
+        # Ledger rows go first: the items stay leased until no row of this batch is left to cancel.
+        await db.transactions.delete_many({"batch_id": journal["batch_id"]})
         for item in journal["items"]:
             restore = {"currentStock": item["stock_before"]}
             if item.get("last_updated") is not None:
                 restore["lastUpdated"] = item["last_updated"]
             # restore + unlock in one document operation: the old holder cannot write to this item afterwards
             await db.items.update_one({"id": item["item_id"], "_stock_lock": token}, {"$set": restore, **_UNLOCK})
-        await db.transactions.delete_many({"batch_id": journal["batch_id"]})
         await db.stock_journal.update_one({"token": token}, {"$set": {"state": "undone", "undone_at": _now()}})
     await db.items.update_many({"_stock_lock": token}, _UNLOCK)
 
@@ -131,6 +133,14 @@ async def stock_batch(db, lock_rows, batch_id: str, rows: list):
             detail = UNDO_PENDING
         if isinstance(exc, HTTPException) or not isinstance(exc, Exception):
             raise
+        if detail == NOT_SAVED:  # nothing was undone if the batch had finished and only the reply was lost
+            try:
+                state = (await db.stock_journal.find_one({"token": token}, {"_id": 0, "state": 1}) or {}).get("state")
+            except Exception:
+                logger.exception("Hasil batch %s belum dapat dipastikan", batch_id)
+                raise HTTPException(500, UNSURE) from exc
+            if state == "done":
+                return  # the batch stands and undo_batch released the leases
         logger.exception("Batch %s gagal dan dibatalkan", batch_id)
         raise HTTPException(500, detail) from exc
     try:
