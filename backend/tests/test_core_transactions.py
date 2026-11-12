@@ -166,7 +166,9 @@ def test_in_increases_stock_and_writes_ledger_row(client):
     assert (tx["previous_quantity"], tx["new_quantity"], tx["change_quantity"]) == (1000, 1200, 200)
     assert (tx["source"], tx["notes"]) == ("BNPB", "Karung 50kg")
     assert (tx["user_id"], tx["user_name"], tx["role"]) == ("u_petugas", "Petugas", "petugas")
-    assert tx["occurred_at"].startswith("2026-11-05") and tx["transaction_id"].startswith("tx_") and "_id" not in tx
+    # The chosen day is stamped at the current WITA time, so compare the date in WITA (UTC+8).
+    occurred_wita = datetime.fromisoformat(tx["occurred_at"]).astimezone(timezone(timedelta(hours=8)))
+    assert occurred_wita.date().isoformat() == "2026-11-05" and tx["transaction_id"].startswith("tx_") and "_id" not in tx
     rows = ledger(client)
     assert len(rows) == 1 and rows[0]["transaction_id"] == tx["transaction_id"] and rows[0]["change_quantity"] == 200
     listed = client.get("/api/transactions", headers=auth(), params={"type": "IN", "item_id": "beras"}).json()
