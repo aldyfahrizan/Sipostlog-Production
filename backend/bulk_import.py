@@ -76,7 +76,10 @@ def validate_header(kind: str, raw: dict) -> tuple[dict, list]:
             except HTTPException as e:
                 errors.append(e.detail)
     elif header["date"]:
-        header["occurred_at"] = occurred_at_from(header["date"])
+        try:
+            header["occurred_at"] = occurred_at_from(header["date"])
+        except HTTPException as e:
+            errors.append(e.detail)
     return header, errors
 
 

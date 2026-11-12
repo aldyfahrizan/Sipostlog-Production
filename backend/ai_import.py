@@ -220,8 +220,10 @@ async def opname_preview(db, raw_header: dict, raw_rows: list) -> dict:
             header["date"] = to_date(raw_header["date"]).isoformat()
         except ValueError as e:
             header_errors.append(str(e))
-    occurred = occurred_at_from(header["date"])
-    if occurred > datetime.now(timezone.utc):
+    try:
+        occurred = occurred_at_from(header["date"])
+    except HTTPException:
+        occurred = datetime.now(timezone.utc)
         header_errors.append("Tanggal opname tidak boleh di masa depan.")
     ids = list({r["item_id"] for r in raw_rows if r["item_id"]})
     items = {i["id"]: i async for i in db.items.find({"id": {"$in": ids}}, {"_id": 0})}

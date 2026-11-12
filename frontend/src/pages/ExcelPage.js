@@ -45,7 +45,8 @@ export default function ExcelPage() {
   };
 
   const upload = async (file) => {
-    if (!file || busy) return;
+    if (!file) return;
+    if (busy === "import") { if (fileRef.current) fileRef.current.value = ""; toast.error("Tunggu proses sebelumnya selesai, lalu pilih berkas lagi."); return; }
     if (!file.name.toLowerCase().endsWith(".xlsx")) { toast.error("Berkas harus .xlsx"); return; }
     setBusy("import"); setImportResult(null);
     const fd = new FormData(); fd.append("file", file);

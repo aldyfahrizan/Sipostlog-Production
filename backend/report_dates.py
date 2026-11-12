@@ -47,9 +47,6 @@ def next_day_start_utc(d: date) -> datetime:
     return datetime(d.year, d.month, d.day, tzinfo=WITA).astimezone(timezone.utc) + timedelta(days=1)
 
 
-def periode_id(start: Optional[str], end: Optional[str]) -> str:
-    """Period of a report in words. `start`/`end` are YYYY-MM-DD strings already validated by the caller."""
-    if start and end:
-        return f"Periode {tanggal_id(date.fromisoformat(start[:10]))} s.d. {tanggal_id(date.fromisoformat(end[:10]))}"
-    last = date.fromisoformat(end[:10]) if end else today_wita()
-    return f"Sampai Dengan Tanggal {tanggal_id(last)}"
+def periode_id(start: date, end: date) -> str:
+    """Period of a report in words, from the first and last day the report really holds."""
+    return f"Periode {tanggal_id(start)} s.d. {tanggal_id(end)}"

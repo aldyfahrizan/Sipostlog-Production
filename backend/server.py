@@ -27,7 +27,7 @@ from auth import (
 from admin_login import AdminLoginBody, UserResponse, admin_password_config_ok, login_admin, seed_local_admin
 from excel_utils import build_opname_template, build_workbook, parse_opname_upload
 from pdf_utils import build_pdf_report
-from report_dates import dicetak_wita, next_day_start_utc, parse_report_date, periode_id, tanggal_id, today_wita
+from report_dates import WITA, dicetak_wita, next_day_start_utc, parse_report_date, periode_id, tanggal_id, today_wita
 from seed_data import CATALOG_VERSION, DESTINATION_CYCLE, EXPECTED_ITEM_COUNT, INCIDENT_TYPES, INITIAL_ITEMS
 from management import router as management_router
 from public_catalog import router as public_catalog_router
@@ -117,14 +117,19 @@ def parse_date(value: Optional[str], end=False) -> datetime:
 
 
 def occurred_at_from(value: Optional[str]) -> datetime:
+    """Moment of a stock-in or correction: the chosen WITA day at the current WITA time of day."""
+    now = now_utc()
     if not value:
-        return now_utc()
+        return now
     try:
         d = date_type.fromisoformat(value[:10])
     except ValueError:
         raise HTTPException(status_code=400, detail="Format tanggal harus YYYY-MM-DD")
-    now = now_utc()
-    return datetime(d.year, d.month, d.day, now.hour, now.minute, now.second, tzinfo=timezone.utc)
+    local = now.astimezone(WITA)
+    occurred = datetime(d.year, d.month, d.day, local.hour, local.minute, local.second, tzinfo=WITA).astimezone(timezone.utc)
+    if occurred > now:
+        raise HTTPException(status_code=400, detail="Tanggal tidak boleh melewati hari ini.")
+    return occurred
 
 
 def date_range(start: Optional[str], end: Optional[str]):
@@ -497,11 +502,26 @@ async def stock_items_as_of(day) -> list:
     items = await db.items.find({}, {"_id": 0}).sort("id", 1).to_list(200)
     if day >= today_wita():
         return items
-    later = {}
-    query = {**ACTIVE_TX, "type": {"$ne": "REVERSAL"}, "occurred_at": {"$gte": next_day_start_utc(day)}}
-    async for t in db.transactions.find(query, {"_id": 0, "item_id": 1, "change_quantity": 1}):
+    cutoff = next_day_start_utc(day)
+    later, last_seen = {}, {}
+    query = {**ACTIVE_TX, "type": {"$ne": "REVERSAL"}, "occurred_at": {"$gte": cutoff}}
+    async for t in db.transactions.find(query, {"_id": 0, "item_id": 1, "change_quantity": 1, "item_name": 1, "category": 1, "unit": 1}):
         later[t["item_id"]] = later.get(t["item_id"], 0) + t["change_quantity"]
-    return [{**i, "currentStock": i["currentStock"] - later.get(i["id"], 0)} for i in items]
+        last_seen[t["item_id"]] = t
+    # "Pembaruan Terakhir" is blank: the current value can be later than the report date.
+    rows = [{**i, "currentStock": i["currentStock"] - later.get(i["id"], 0), "lastUpdated": None} for i in items]
+    current = {i["id"] for i in items}
+    # Items deleted since then (deletion needs stock 0) still had stock on the report date.
+    rows += [{"id": item_id, "name": t.get("item_name", item_id), "category": t.get("category", ""), "unit": t.get("unit", ""),
+              "currentStock": -later[item_id], "minThreshold": 0, "lastUpdated": None}
+             for item_id, t in last_seen.items() if item_id not in current and later[item_id]]
+    # Items that did not exist yet: first movement of any kind is after the report date and nothing was in stock.
+    not_yet = set()
+    async for g in db.transactions.aggregate([{"$group": {"_id": "$item_id", "first": {"$min": "$occurred_at"}}}]):
+        first = g["first"]
+        if isinstance(first, datetime) and (first if first.tzinfo else first.replace(tzinfo=timezone.utc)) >= cutoff:
+            not_yet.add(g["_id"])
+    return sorted((r for r in rows if r["currentStock"] or r["id"] not in not_yet), key=lambda r: r["id"])
 
 
 @api.get("/export/stock")
@@ -539,7 +559,7 @@ async def export_stock_pdf(date: Optional[str] = None, user=Depends(require_role
 @api.get("/export/distribution")
 async def export_distribution(start: Optional[str] = None, end: Optional[str] = None, user=Depends(require_role(*STAFF))):
     data = await dashboard_distribution(start, end, user)
-    periode = periode_id(start, end)
+    periode = periode_id(date_type.fromisoformat(data["range"]["start"]), date_type.fromisoformat(data["range"]["end"]))
     meta = [("Periode", f"{data['range']['start']} s/d {data['range']['end']}"), ("Dicetak", now_wita()), ("Oleh", user["name"] or user["email"])]
     txs = await db.transactions.find({**ACTIVE_TX, "type": "OUT", "occurred_at": {"$gte": parse_date(data["range"]["start"]), "$lt": parse_date(data["range"]["end"], end=True)}}, {"_id": 0}).sort("occurred_at", -1).to_list(5000)
     content = build_workbook([
@@ -559,7 +579,7 @@ async def export_distribution(start: Optional[str] = None, end: Optional[str] = 
 @api.get("/export/distribution/pdf")
 async def export_distribution_pdf(start: Optional[str] = None, end: Optional[str] = None, user=Depends(require_role(*STAFF))):
     data = await dashboard_distribution(start, end, user)
-    periode = periode_id(start, end)
+    periode = periode_id(date_type.fromisoformat(data["range"]["start"]), date_type.fromisoformat(data["range"]["end"]))
     meta = [("Periode", f"{data['range']['start']} s/d {data['range']['end']}"), ("Dicetak", now_wita())]
     txs = await db.transactions.find({**ACTIVE_TX, "type": "OUT", "occurred_at": {"$gte": parse_date(data["range"]["start"]), "$lt": parse_date(data["range"]["end"], end=True)}}, {"_id": 0}).sort("occurred_at", -1).to_list(5000)
     content = build_pdf_report(
@@ -584,7 +604,7 @@ async def export_transactions(start: Optional[str] = None, end: Optional[str] = 
     rows = [[fmt_dt(t["occurred_at"]), TYPE_LABEL.get(t["type"], t["type"]), t["item_name"], t["previous_quantity"], t["new_quantity"], t["change_quantity"], t["unit"],
              t.get("source") or t.get("destination") or "", t.get("incident_type", ""), t.get("reason", ""), t["user_name"], t.get("notes", "")] for t in txs]
     content = build_workbook([{
-        "name": "Riwayat Transaksi", "title": f"Riwayat Transaksi Stok {periode_id(start, end)}",
+        "name": "Riwayat Transaksi", "title": f"Riwayat Transaksi Stok {periode_id(start_dt.date(), (end_dt - timedelta(days=1)).date())}",
         "meta": [("Periode", f"{start_dt.strftime('%Y-%m-%d')} s/d {(end_dt - timedelta(days=1)).strftime('%Y-%m-%d')}"), ("Dicetak", now_wita()), ("Oleh", user["name"] or user["email"])],
         "headers": ["Waktu", "Jenis", "Nama Item", "Stok Sebelum", "Stok Sesudah", "Perubahan", "Satuan", "Sumber / Tujuan", "Jenis Kejadian", "Alasan", "Petugas", "Catatan"],
         "rows": rows,
@@ -599,7 +619,7 @@ async def export_transactions_pdf(start: Optional[str] = None, end: Optional[str
     rows = [[fmt_dt(t["occurred_at"]), TYPE_LABEL.get(t["type"], t["type"]), t["item_name"], t["previous_quantity"], t["new_quantity"],
              t["change_quantity"], t["unit"], t.get("source") or t.get("destination") or "", t["user_name"]] for t in txs]
     content = build_pdf_report(
-        f"RIWAYAT TRANSAKSI STOK LOGISTIK<br/>{periode_id(start, end)}",
+        f"RIWAYAT TRANSAKSI STOK LOGISTIK<br/>{periode_id(start_dt.date(), (end_dt - timedelta(days=1)).date())}",
         [{
             "title": "Rincian Mutasi Stok",
             "meta": [("Periode", f"{start_dt.strftime('%Y-%m-%d')} s/d {(end_dt - timedelta(days=1)).strftime('%Y-%m-%d')}"), ("Dicetak", now_wita())],

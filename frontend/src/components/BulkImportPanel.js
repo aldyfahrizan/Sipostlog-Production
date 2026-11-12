@@ -62,7 +62,8 @@ export default function BulkImportPanel({ kind }) {
   };
 
   const choose = async (f) => {
-    if (!f || busy) return;
+    if (!f) return;
+    if (busy === "preview" || busy === "save") { if (fileRef.current) fileRef.current.value = ""; toast.error("Tunggu proses sebelumnya selesai, lalu pilih berkas lagi."); return; }
     if (!f.name.toLowerCase().endsWith(".xlsx")) { toast.error("Berkas harus .xlsx"); return; }
     const id = ++pick.current;
     setBusy("preview"); setSaved(null); setPreview(null); setError(""); setFile(f);
