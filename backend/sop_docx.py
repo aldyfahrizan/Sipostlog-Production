@@ -1,5 +1,4 @@
 """Editable Word (.docx) version of the SOP user module, built from sop_content."""
-from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 
@@ -10,6 +9,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Mm, Pt, RGBColor
 
+from report_dates import dicetak_wita
 from sop_content import ROLE_ACCESS, SECTIONS, SOP_META
 
 LOGO_DIR = Path(__file__).parent / "assets" / "logo"
@@ -183,7 +183,7 @@ def build_sop_docx(printed_by: str) -> bytes:
 
     note = doc.add_paragraph()
     note.paragraph_format.space_before = Pt(14)
-    r = note.add_run(f"Dicetak dari SIPOSTLOG oleh {printed_by} pada {datetime.now().strftime('%d/%m/%Y %H:%M')}.")
+    r = note.add_run(f"Dicetak dari SIPOSTLOG oleh {printed_by} pada {dicetak_wita()}.")
     r.italic, r.font.size, r.font.color.rgb = True, Pt(8.5), MUTED
 
     for text, space in (("Ditetapkan di Martapura", 10), ("pada tanggal ....................", 0),

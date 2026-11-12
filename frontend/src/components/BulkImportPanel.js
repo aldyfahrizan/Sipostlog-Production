@@ -44,6 +44,7 @@ async function postFile(path, file, extra = {}) {
 export default function BulkImportPanel({ kind }) {
   const cfg = KINDS[kind];
   const fileRef = useRef();
+  const pick = useRef(0);
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState(null);
   const [saved, setSaved] = useState(null);
@@ -62,11 +63,13 @@ export default function BulkImportPanel({ kind }) {
 
   const choose = async (f) => {
     if (!f) return;
+    if (busy === "preview" || busy === "save") { if (fileRef.current) fileRef.current.value = ""; toast.error("Tunggu proses sebelumnya selesai, lalu pilih berkas lagi."); return; }
     if (!f.name.toLowerCase().endsWith(".xlsx")) { toast.error("Berkas harus .xlsx"); return; }
+    const id = ++pick.current;
     setBusy("preview"); setSaved(null); setPreview(null); setError(""); setFile(f);
-    try { setPreview(await postFile(`/excel/import/${kind}/preview`, f)); }
-    catch (e) { setError(e.message); setFile(null); }
-    finally { setBusy(""); if (fileRef.current) fileRef.current.value = ""; }
+    try { const data = await postFile(`/excel/import/${kind}/preview`, f); if (id === pick.current) setPreview(data); }
+    catch (e) { if (id === pick.current) { setError(e.message); setFile(null); } }
+    finally { if (id === pick.current) { setBusy(""); if (fileRef.current) fileRef.current.value = ""; } }
   };
 
   const save = async () => {
@@ -104,7 +107,7 @@ export default function BulkImportPanel({ kind }) {
 
       {preview && (
         <div className="mt-4 space-y-3" data-testid={`${testId}-preview`}>
-          <div className="flex items-center justify-between gap-2"><div className="text-sm font-semibold text-white">Pratinjau · <span className="text-slate-400">{preview.filename}</span></div><button onClick={reset} className="btn-ghost !py-1 text-xs" data-testid={`${testId}-cancel`}><X size={13} /> Batal</button></div>
+          <div className="flex items-center justify-between gap-2"><div className="text-sm font-semibold text-white">Pratinjau · <span className="text-slate-400">{preview.filename}</span></div><button onClick={reset} className="btn-ghost !py-1 text-xs" data-testid={`${testId}-cancel`}><X size={13} /> Ganti berkas</button></div>
           <dl className="grid grid-cols-2 gap-x-4 gap-y-1 rounded-lg border border-ink-700 bg-ink-900/60 p-3 text-xs sm:grid-cols-3">
             {cfg.header(preview.header).map(([k, v]) => <div key={k} className="min-w-0"><dt className="text-slate-500">{k}</dt><dd className="truncate font-semibold text-slate-200">{v || "—"}</dd></div>)}
           </dl>
@@ -112,7 +115,7 @@ export default function BulkImportPanel({ kind }) {
           {preview.rows.length > 0 && (
             <div className="overflow-x-auto rounded-lg border border-ink-700">
               <table className="w-full text-xs">
-                <thead className="bg-ink-900/80 text-left text-slate-400"><tr><th className="px-2 py-2">No</th><th className="px-2 py-2">Item</th><th className="px-2 py-2 text-right">Stok</th><th className="px-2 py-2 text-right">{cfg.qtyLabel}</th><th className="px-2 py-2 text-right">Sesudah</th><th className="px-2 py-2">Status</th></tr></thead>
+                <thead className="bg-ink-900/80 text-left text-slate-400"><tr><th className="px-2 py-2">No</th><th className="px-2 py-2">Barang</th><th className="px-2 py-2 text-right">Stok</th><th className="px-2 py-2 text-right">{cfg.qtyLabel}</th><th className="px-2 py-2 text-right">Sesudah</th><th className="px-2 py-2">Status</th></tr></thead>
                 <tbody className="divide-y divide-ink-700/60">
                   {preview.rows.map((r) => (
                     <Fragment key={r.row}>
@@ -132,7 +135,7 @@ export default function BulkImportPanel({ kind }) {
             </div>
           )}
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <span className="text-xs text-slate-400" data-testid={`${testId}-summary`}>{preview.rows.length - preview.row_errors} baris benar · <span className={preview.row_errors ? "text-red-300" : ""}>{preview.row_errors} baris salah</span>{preview.header_errors.length > 0 && " · kepala berkas belum lengkap"}</span>
+            <span className="text-xs text-slate-400" data-testid={`${testId}-summary`}>{preview.rows.length - preview.row_errors} baris benar · <span className={preview.row_errors ? "text-red-300" : ""}>{preview.row_errors} baris salah</span>{preview.header_errors.length > 0 && " · data BAST di bagian atas belum lengkap"}</span>
             <button onClick={save} disabled={!preview.valid || busy === "save"} className="btn-primary !py-2 text-xs" data-testid={`${testId}-save`}>{busy === "save" ? "Menyimpan…" : `Simpan ${preview.rows.length} transaksi`}</button>
           </div>
           {!preview.valid && <p className="text-xs text-slate-500">Tombol Simpan aktif setelah semua baris benar. Perbaiki berkas Excel lalu unggah ulang.</p>}

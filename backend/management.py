@@ -13,7 +13,7 @@ from admin_login import UserResponse
 from account_limits import MAX_USERS, insert_user_with_limit
 from auth import public_user, require_role
 from admin_actions import ReasonBody, ActionResult, audit_record, finalize_cancellation
-from stock_lock import reserve_stock
+from stock_lock import BUSY, held, reserve_stock_with_token
 
 router = APIRouter(prefix="/api")
 
@@ -90,7 +90,7 @@ async def delete_item(item_id: str, body: ReasonBody, request: Request, user=Dep
     db = request.app.state.db
     if not await db.items.find_one({"id": item_id}, {"_id": 0, "id": 1}):
         raise HTTPException(404, "Barang tidak ditemukan.")
-    async with reserve_stock(db, [{"item_id": item_id}]) as reserved:
+    async with reserve_stock_with_token(db, [{"item_id": item_id}]) as (token, reserved):
         item = reserved[item_id]
         if item["currentStock"] != 0:
             raise HTTPException(409, "Stok barang harus nol. Selesaikan pembatalan atau koreksi stok sebelum menghapus barang.")
@@ -98,7 +98,8 @@ async def delete_item(item_id: str, body: ReasonBody, request: Request, user=Dep
             await finalize_cancellation(db, cancellation)
         receipt = audit_record("item", item_id, item["name"], body, user)
         await db.catalog_audit.update_one({"audit_id": receipt["audit_id"]}, {"$setOnInsert": {**receipt, "snapshot": item, "state": "prepared"}}, upsert=True)
-        await db.items.delete_one({"id": item_id, "currentStock": 0})
+        if not (await db.items.delete_one({"id": item_id, "currentStock": 0, **held(token)})).deleted_count:
+            raise HTTPException(409, BUSY)
         await db.admin_audit.update_one({"audit_id": receipt["audit_id"]}, {"$setOnInsert": receipt}, upsert=True)
         await db.catalog_audit.update_one({"audit_id": receipt["audit_id"]}, {"$set": {"state": "completed"}})
     return {"ok": True, "audit_id": receipt["audit_id"], "message": "Barang dihapus dari katalog. Riwayat dan alasan penghapusan tetap tersimpan."}

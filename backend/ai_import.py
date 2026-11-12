@@ -10,6 +10,7 @@ import base64
 import difflib
 import json
 import logging
+import math
 import re
 import uuid
 from datetime import datetime, timezone
@@ -26,7 +27,7 @@ from auth import ROLE_ADMIN, ROLE_OPNAME, ROLE_PETUGAS, require_role
 from bulk_excel import to_date, to_int
 from bulk_import import preview_from, write_batch
 from seed_data import INCIDENT_TYPES
-from stock_lock import reserve_stock_with_token
+from stock_lock import LEASE_LOST, held, stock_batch
 
 router = APIRouter(prefix="/api/ai-import")
 logger = logging.getLogger("sipostlog")
@@ -37,6 +38,8 @@ ALLOWED_EXT = (".docx", ".xlsx", ".pdf") + IMAGE_EXT
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 MAX_TEXT_CHARS = 40_000
 MAX_PDF_PAGES = 5
+MAX_IMAGE_PIXELS = 40_000_000
+MAX_PAGE_PIXELS = 12_000_000
 MAX_ROWS = 200
 STALE = "Stok berubah sejak diperiksa. Tekan Periksa untuk melihat angka terbaru."
 
@@ -53,6 +56,7 @@ async def _user(kind: str, request: Request) -> dict:
 
 # ---------- reading the uploaded file ----------
 def xlsx_to_text(content: bytes) -> str:
+    knowledge.check_zip_size(content)
     wb = load_workbook(BytesIO(content), data_only=True, read_only=True)
     lines = []
     for ws in wb.worksheets:
@@ -81,7 +85,13 @@ def read_pdf(content: bytes) -> tuple[str, list[str]]:
         text = "\n".join(pdf[i].get_textpage().get_text_range() for i in range(pages)).strip()
         if len(re.sub(r"\s", "", text)) >= 40:
             return text, []
-        images = [_jpeg_data_url(pdf[i].render(scale=2).to_pil()) for i in range(min(len(pdf), MAX_PDF_PAGES))]
+        images = []
+        for i in range(min(len(pdf), MAX_PDF_PAGES)):
+            page = pdf[i]
+            width, height = page.get_size()
+            # Scale 2 for normal pages; a huge page gets a lower scale so its image stays under the cap.
+            scale = min(2.0, 0.99 * math.sqrt(MAX_PAGE_PIXELS / max(width * height, 1.0)))
+            images.append(_jpeg_data_url(page.render(scale=scale).to_pil()))
         return "", images
     finally:
         pdf.close()
@@ -98,7 +108,12 @@ def read_document(filename: str, content: bytes) -> tuple[str, list[str]]:
         if name.endswith(".pdf"):
             return read_pdf(content)
         from PIL import Image
-        return "", [_jpeg_data_url(Image.open(BytesIO(content)))]
+        image = Image.open(BytesIO(content))  # reads the header only; pixels are decoded later
+        if image.width * image.height > MAX_IMAGE_PIXELS:
+            raise knowledge.FileTooBig("Gambar terlalu besar. Kecilkan ukuran gambar lalu unggah ulang.")
+        return "", [_jpeg_data_url(image)]
+    except knowledge.FileTooBig:
+        raise
     except Exception:
         raise ValueError("Berkas tidak dapat dibaca. Pastikan berkas tidak rusak atau terkunci kata sandi.")
 
@@ -205,8 +220,10 @@ async def opname_preview(db, raw_header: dict, raw_rows: list) -> dict:
             header["date"] = to_date(raw_header["date"]).isoformat()
         except ValueError as e:
             header_errors.append(str(e))
-    occurred = occurred_at_from(header["date"])
-    if occurred > datetime.now(timezone.utc):
+    try:
+        occurred = occurred_at_from(header["date"])
+    except HTTPException:
+        occurred = datetime.now(timezone.utc)
         header_errors.append("Tanggal opname tidak boleh di masa depan.")
     ids = list({r["item_id"] for r in raw_rows if r["item_id"]})
     items = {i["id"]: i async for i in db.items.find({"id": {"$in": ids}}, {"_id": 0})}
@@ -217,8 +234,8 @@ async def opname_preview(db, raw_header: dict, raw_rows: list) -> dict:
         item = items.get(r["item_id"])
         try:
             row["quantity"] = to_int(r["quantity"], positive=False)
-        except ValueError:
-            row["error"] = "Stok fisik harus bilangan bulat 0 atau lebih."
+        except ValueError as e:
+            row["error"] = str(e) or "Stok fisik harus bilangan bulat 0 atau lebih."
         if not item:
             row["error"] = "ID item tidak dikenal." if r["item_id"] else "ID Item kosong."
         else:
@@ -269,16 +286,16 @@ async def extract(kind: str, request: Request, file: UploadFile = File(...)):
     filename = file.filename or ""
     if not filename.lower().endswith(ALLOWED_EXT):
         raise HTTPException(400, "Format tidak didukung. Gunakan Word (.docx), Excel (.xlsx), PDF, atau foto/scan (.jpg, .png).")
-    content = await file.read()
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(400, "Ukuran berkas melebihi 8 MB.")
+    await knowledge._rate_limit(db, user["user_id"])
     try:
         text, images = await run_in_threadpool(read_document, filename, content)
     except ValueError as e:
         raise HTTPException(400, str(e))
     if not images and len(text.strip()) < 10:
         raise HTTPException(400, "Dokumen tidak berisi teks yang bisa dibaca.")
-    await knowledge._rate_limit(db, user["user_id"])
     catalog = await db.items.find({}, {"_id": 0, "id": 1, "name": 1, "unit": 1}).sort("id", 1).to_list(500)
     data, model = await extract_with_ai(kind, catalog, text[:MAX_TEXT_CHARS], images)
     header, rows = normalise_extraction(data, catalog)
@@ -318,14 +335,16 @@ async def write_opname(db, preview: dict, user: dict, batch: dict) -> tuple[list
     rows, occurred = preview["rows"], preview["_occurred_at"]
     lock_rows = [{"item_id": r["item_id"], "previous_quantity": r["current_stock"]} for r in rows]
     saved, unchanged = [], 0
-    async with reserve_stock_with_token(db, lock_rows) as (token, _):
+    async with stock_batch(db, lock_rows, batch["batch_id"], rows) as (token, _):
         for r in rows:
             if r["quantity"] == r["current_stock"]:
                 unchanged += 1
                 continue
             before = await db.items.find_one_and_update(
-                {"id": r["item_id"], "_stock_lock": token}, {"$set": {"currentStock": r["quantity"]}},
+                {"id": r["item_id"], **held(token)}, {"$set": {"currentStock": r["quantity"]}},
                 projection={"_id": 0}, return_document=ReturnDocument.BEFORE)
+            if not before:  # the lease was lost: this holder must not write
+                raise HTTPException(409, LEASE_LOST)
             reason = "Stock opname via dokumen (dibaca AI)" + (f": {r['note']}" if r["note"] else "")
             saved.append(await record_transaction("ADJUSTMENT", before, r["quantity"], user, occurred,
                                                   reason=reason, notes=f"Dokumen {batch['batch_file']}", **batch))

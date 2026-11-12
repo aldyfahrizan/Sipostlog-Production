@@ -41,7 +41,7 @@ export default function PublicPage() {
         <div className="mx-auto max-w-6xl px-4 sm:px-6 py-10 sm:py-14 animate-rise">
           <div className="text-xs font-bold text-brand-orange" data-testid="public-organization">BPBD KABUPATEN BANJAR</div>
           <h1 className="mt-4 font-extrabold text-brand-blue" data-testid="public-app-title"><span className="block text-4xl sm:text-5xl lg:text-6xl">SIPOSTLOG</span><span className="mt-3 block max-w-2xl text-base md:text-lg font-bold leading-relaxed">Sistem Informasi Pemantauan Stock Opname Logistik</span></h1>
-          <div className="mt-7 flex flex-wrap gap-x-6 gap-y-2"><a href="#penyaluran" className="inline-flex items-center gap-2 text-sm font-semibold text-brand-blue hover:text-brand-orange transition-colors" data-testid="public-distribution-link">Lihat penyaluran logistik <ArrowDown size={15} /></a><a href="#jenis-logistik" className="inline-flex items-center gap-2 text-sm font-semibold text-brand-blue hover:text-brand-orange transition-colors" data-testid="public-catalog-link">Jelajahi jenis logistik <ArrowDown size={15} /></a></div>
+          <div className="mt-7 flex flex-wrap gap-x-6 gap-y-2"><a href="#penyaluran" className="inline-flex min-h-[44px] items-center gap-2 text-sm font-semibold text-brand-blue hover:text-brand-orange transition-colors" data-testid="public-distribution-link">Lihat penyaluran logistik <ArrowDown size={15} /></a><a href="#jenis-logistik" className="inline-flex min-h-[44px] items-center gap-2 text-sm font-semibold text-brand-blue hover:text-brand-orange transition-colors" data-testid="public-catalog-link">Jelajahi jenis logistik <ArrowDown size={15} /></a></div>
         </div>
       </section>
 
@@ -58,10 +58,10 @@ export default function PublicPage() {
         <div className="flex flex-wrap gap-2" data-testid="public-category-filters">
           {categories.map((value, index) => <button key={value} onClick={() => setCategory(value)} aria-pressed={category === value}
             data-testid={value === "Semua" ? "public-category-filter-all" : `public-category-filter-${index}`}
-            className={`rounded-full px-3.5 py-2 text-xs font-bold transition-colors border ${category === value ? "bg-blue-50 text-brand-blue border-blue-300" : "bg-white text-slate-600 border-slate-200 hover:border-blue-300"}`}>{value}</button>)}
+            className={`min-h-[44px] rounded-full px-3.5 py-2 text-xs font-bold transition-colors border ${category === value ? "bg-brand-blue text-white border-brand-blue" : "bg-white text-slate-600 border-slate-200 hover:border-blue-300"}`}>{value}</button>)}
         </div>
 
-        {error && <div role="alert" data-testid="public-load-error" className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">Daftar jenis logistik belum dapat dimuat.<button onClick={load} data-testid="public-retry-button" className="inline-flex items-center gap-2 font-bold"><RefreshCw size={15} /> Coba lagi</button></div>}
+        {error && <div role="alert" data-testid="public-load-error" className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">Daftar jenis logistik belum dapat dimuat.<button onClick={load} data-testid="public-retry-button" className="inline-flex min-h-[44px] items-center gap-2 font-bold"><RefreshCw size={15} /> Coba lagi</button></div>}
         <div className="mt-6 grid items-start gap-4 md:grid-cols-2 stagger" data-testid="public-item-grid">
           {!loading && groups.map(([name, list]) => <section key={name} className="min-w-0 rounded-lg border border-slate-200 bg-white" data-testid="public-category-group">
             <header className="flex items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-4 py-2.5 rounded-t-lg"><h3 className="min-w-0 truncate text-sm font-bold text-brand-blue">{name}</h3><span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-600 border border-slate-200">{list.length} jenis</span></header>

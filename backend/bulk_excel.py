@@ -6,6 +6,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.worksheet.datavalidation import DataValidation
 
+from report_dates import dicetak_wita
 from excel_utils import BORDER, HEADER_FILL, HEADER_FONT, TITLE_FONT
 
 FILL_ME = PatternFill("solid", fgColor="FEF3C7")
@@ -38,6 +39,7 @@ KINDS = {
 }
 TABLE_HEADERS = ["ID Item", "Nama Item", "Kategori", "Satuan", "Stok Sistem"]
 MAX_UPLOAD_BYTES = 2 * 1024 * 1024
+MAX_QUANTITY = 1_000_000_000
 
 
 def _norm(value) -> str:
@@ -52,7 +54,7 @@ def build_bulk_template(kind: str, items: list, printed_by: str, incident_types:
     ws.title = "Barang Masuk" if kind == "in" else "Penyaluran"
     ws.append([spec["title"]])
     ws["A1"].font = TITLE_FONT
-    ws.append([f"BPBD Kabupaten Banjar — SIPOSTLOG · Dicetak {datetime.now().strftime('%d/%m/%Y %H:%M')} oleh {printed_by}"])
+    ws.append([f"BPBD Kabupaten Banjar — SIPOSTLOG · Dicetak {dicetak_wita()} oleh {printed_by}"])
     ws.append(["Petunjuk: isi kotak kuning. Satu berkas = satu BAST. Jangan ubah kolom ID Item; kosongkan jumlah untuk barang yang tidak ada di BAST."])
     ws.append([])
     incident_row = None
@@ -181,4 +183,6 @@ def to_int(value, *, positive: bool) -> int:
         raise ValueError
     if value < (1 if positive else 0):
         raise ValueError
+    if value > MAX_QUANTITY:
+        raise ValueError("Jumlah terlalu besar. Paling banyak 1.000.000.000 per baris.")
     return value

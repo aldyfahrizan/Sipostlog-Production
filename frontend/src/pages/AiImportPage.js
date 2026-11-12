@@ -44,6 +44,7 @@ function HeaderForm({ kind, header, set, incidents }) {
 export default function AiImportPage() {
   const [items] = useItems();
   const fileRef = useRef();
+  const pick = useRef(0);
   const [status, setStatus] = useState(null);
   const [incidents, setIncidents] = useState([]);
   const [kind, setKind] = useState("opname");
@@ -68,17 +69,19 @@ export default function AiImportPage() {
   });
 
   const upload = async (file) => {
-    if (!file) return;
+    if (!file || busy) return;
+    const id = ++pick.current;
     setBusy("extract"); setError(""); setSaved(null); setDraft(null); setCheck(null);
     const fd = new FormData(); fd.append("file", file);
     try {
       const res = await fetch(`${API}/ai-import/${kind}/extract`, { method: "POST", body: fd, credentials: "include" });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Gagal membaca dokumen");
+      if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Dokumen tidak terbaca. Unggah ulang; bila tetap gagal, hubungi admin.");
+      if (id !== pick.current) return;
       setDraft({ filename: data.filename, model: data.model, read_as: data.read_as, truncated: data.truncated,
         header: { ...emptyHeader, ...data.header }, rows: data.rows.map(newRow) });
       setCheck(data); setDirty(false);
-    } catch (e) { setError(e.message); } finally { setBusy(""); if (fileRef.current) fileRef.current.value = ""; }
+    } catch (e) { if (id === pick.current) setError(e.message); } finally { if (id === pick.current) { setBusy(""); if (fileRef.current) fileRef.current.value = ""; } }
   };
 
   const edit = (fn) => { setDraft((d) => fn(d)); setDirty(true); };
@@ -108,22 +111,22 @@ export default function AiImportPage() {
     <div data-testid="ai-import-page">
       <PageHeader eyebrow="Transaksi" title="Input dari Dokumen (AI)" description="Unggah dokumen Word, Excel, PDF, hasil scan, atau foto. AI membaca isinya dan mengisi daftar barang; Anda memeriksa, memperbaiki bila perlu, lalu menyimpan." />
 
-      {status && !status.ai_enabled && <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800" data-testid="ai-disabled"><AlertTriangle size={15} className="mt-0.5 shrink-0" />Pembaca AI belum aktif. Admin perlu mengisi kunci AI di pengaturan server (lihat tombol Tes koneksi AI di halaman SOP Penggunaan), lalu Redeploy.</div>}
+      {status && !status.ai_enabled && <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-800" data-testid="ai-disabled"><AlertTriangle size={15} className="mt-0.5 shrink-0" />Input dari Dokumen (AI) belum aktif. Hubungi admin. Sementara itu pakai menu Catat Penyaluran atau Stock Opname / Koreksi.</div>}
 
       <div className="mb-4 flex flex-wrap gap-2" role="tablist">
         {Object.entries(KINDS).filter(([k]) => kinds.includes(k)).map(([k, v]) => (
-          <button key={k} role="tab" aria-selected={kind === k} onClick={() => switchKind(k)} className={kind === k ? "btn-primary" : "btn-ghost"} data-testid={`ai-tab-${k}`}>{v.label}</button>
+          <button key={k} role="tab" aria-selected={kind === k} onClick={() => switchKind(k)} disabled={busy === "extract"} className={kind === k ? "btn-primary" : "btn-ghost"} data-testid={`ai-tab-${k}`}>{v.label}</button>
         ))}
       </div>
 
       <Panel title={`Unggah dokumen ${cfg.label}`} subtitle={cfg.hint} testId="ai-upload-panel">
         {!draft && (
-          <div onClick={() => status?.ai_enabled && fileRef.current?.click()} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); if (status?.ai_enabled) upload(e.dataTransfer.files[0]); }}
-            className={`rounded-xl border-2 border-dashed border-slate-300 p-8 text-center ${status?.ai_enabled ? "cursor-pointer hover:border-amber-brand/60" : "opacity-60"}`} data-testid="ai-dropzone">
+          <div aria-busy={busy === "extract"} onClick={() => status?.ai_enabled && !busy && fileRef.current?.click()} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); if (status?.ai_enabled && !busy) upload(e.dataTransfer.files[0]); }}
+            className={`rounded-xl border-2 border-dashed border-slate-300 p-8 text-center ${!status?.ai_enabled ? "opacity-60" : busy === "extract" ? "cursor-wait" : "cursor-pointer hover:border-amber-brand/60"}`} data-testid="ai-dropzone">
             {busy === "extract" ? <ScanText size={28} className="mx-auto animate-pulse text-amber-brand" /> : <FileUp size={28} className="mx-auto text-amber-brand" />}
             <div className="mt-3 text-sm font-semibold text-white">{busy === "extract" ? "AI sedang membaca dokumen… (bisa sampai 1 menit)" : "Tarik berkas ke sini atau klik untuk memilih"}</div>
             <div className="mt-1 text-xs text-slate-500">Word (.docx), Excel (.xlsx), PDF, atau foto/scan (.jpg, .png) · maks. 8 MB · PDF scan dibaca sampai 5 halaman</div>
-            <input ref={fileRef} type="file" accept={ACCEPT} className="hidden" onChange={(e) => upload(e.target.files[0])} data-testid="ai-file-input" />
+            <input ref={fileRef} type="file" accept={ACCEPT} className="hidden" disabled={busy === "extract"} onChange={(e) => upload(e.target.files[0])} data-testid="ai-file-input" />
           </div>
         )}
         <p className="mt-2 text-[11px] text-slate-500">Isi dokumen dikirim ke layanan AI pihak ketiga untuk dibaca. Jangan unggah dokumen yang memuat data pribadi penerima bantuan (NIK, nama per orang).</p>
@@ -142,7 +145,7 @@ export default function AiImportPage() {
           <div className="mt-2 space-y-4" data-testid="ai-draft">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="text-sm font-semibold text-white">Hasil baca · <span className="text-slate-400">{draft.filename}</span> <span className="text-xs font-normal text-slate-500">(dibaca sebagai {draft.read_as})</span></div>
-              <button onClick={reset} className="btn-ghost !py-1 text-xs" data-testid="ai-cancel"><X size={13} /> Batal</button>
+              <button onClick={() => { if (window.confirm("Buang hasil baca dokumen ini? Semua perbaikan Anda akan hilang.")) reset(); }} className="btn-ghost !py-1 text-xs" data-testid="ai-cancel"><X size={13} /> Buang hasil baca</button>
             </div>
             <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-800"><AlertTriangle size={14} className="mt-0.5 shrink-0" />AI bisa salah membaca, terutama angka pada scan atau foto. Cocokkan setiap baris dengan dokumen asli sebelum menyimpan.{draft.truncated && " Dokumen sangat panjang: hanya bagian awal yang dibaca."}</div>
 

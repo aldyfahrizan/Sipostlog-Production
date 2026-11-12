@@ -24,6 +24,7 @@ function ExportCard({ icon: Icon, title, desc, onDownload, onPdf, busyKey, busy,
 
 export default function ExcelPage() {
   const [range, setRange] = useState({ start: todayYMD(-29), end: todayYMD() });
+  const [stockDate, setStockDate] = useState(todayYMD());
   const [busy, setBusy] = useState("");
   const [importResult, setImportResult] = useState(null);
   const [dragging, setDragging] = useState(false);
@@ -45,6 +46,7 @@ export default function ExcelPage() {
 
   const upload = async (file) => {
     if (!file) return;
+    if (busy === "import") { if (fileRef.current) fileRef.current.value = ""; toast.error("Tunggu proses sebelumnya selesai, lalu pilih berkas lagi."); return; }
     if (!file.name.toLowerCase().endsWith(".xlsx")) { toast.error("Berkas harus .xlsx"); return; }
     setBusy("import"); setImportResult(null);
     const fd = new FormData(); fd.append("file", file);
@@ -61,10 +63,12 @@ export default function ExcelPage() {
     <div data-testid="excel-page">
       <PageHeader eyebrow="Laporan" title="Ekspor & Impor Excel" description="Unduh laporan siap cetak dalam format .xlsx atau PDF berkop surat BPBD, atau perbarui stok hasil opname secara massal dengan mengunggah kembali template Excel." />
 
-      <div className="mb-4 flex flex-wrap items-center gap-3"><span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Rentang laporan:</span><DateRangePicker value={range} onChange={setRange} /></div>
+      <div className="mb-4 flex flex-wrap items-center gap-3"><span className="text-xs font-semibold uppercase tracking-wider text-slate-400">Rentang laporan:</span><DateRangePicker value={range} onChange={setRange} />
+        <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-400">Posisi stok per tanggal:
+          <input type="date" value={stockDate} max={todayYMD()} onChange={(e) => setStockDate(e.target.value || todayYMD())} className="field !w-auto !py-1.5 text-xs" data-testid="export-stock-date-input" /></label></div>
       <div className="grid gap-4 md:grid-cols-3 stagger">
-        <ExportCard testId="export-stock" icon={Package} title="Laporan Stok" desc="37 item: nama, kategori, stok, satuan, ambang minimum, status, dan pembaruan terakhir." busy={busy} busyKey="stock"
-          onDownload={() => dl("stock", "/export/stock")} onPdf={() => dl("stock-pdf", "/export/stock/pdf", "laporan-stok.pdf")} />
+        <ExportCard testId="export-stock" icon={Package} title="Laporan Stok" desc="37 item: nama, kategori, stok pada tanggal terpilih, satuan, ambang minimum, status, dan pembaruan terakhir." busy={busy} busyKey="stock"
+          onDownload={() => dl("stock", `/export/stock?date=${stockDate}`)} onPdf={() => dl("stock-pdf", `/export/stock/pdf?date=${stockDate}`, "laporan-stok.pdf")} />
         <ExportCard testId="export-distribution" icon={Truck} title="Laporan Penyaluran" desc="Rekap per item, per tujuan, dan rincian transaksi penyaluran pada rentang tanggal terpilih." busy={busy} busyKey="dist"
           onDownload={() => dl("dist", `/export/distribution?start=${range.start}&end=${range.end}`)} onPdf={() => dl("dist-pdf", `/export/distribution/pdf?start=${range.start}&end=${range.end}`, "laporan-penyaluran.pdf")} />
         <ExportCard testId="export-transactions" icon={History} title="Riwayat Transaksi" desc="Seluruh mutasi stok (masuk, penyaluran, koreksi) pada rentang tanggal terpilih." busy={busy} busyKey="tx"
@@ -72,7 +76,7 @@ export default function ExcelPage() {
       </div>
 
       <div className="mt-8 grid gap-6 lg:grid-cols-[1fr_1fr]">
-        <Panel title="Update Stok via Excel" subtitle="Stock opname massal dalam 3 langkah" testId="excel-import-panel">
+        <Panel title="Perbarui Stok lewat Excel" subtitle="Stock opname massal dalam 3 langkah" testId="excel-import-panel">
           <ol className="space-y-3 text-sm text-slate-300">
             <li className="flex gap-3"><span className="num h-6 w-6 shrink-0 rounded-full bg-amber-brand text-ink-900 font-bold text-xs flex items-center justify-center">1</span><div>Unduh template berisi 37 item dan stok sistem saat ini.<div className="mt-2"><button onClick={() => dl("tpl", "/excel/template")} disabled={busy === "tpl"} className="btn-ghost !py-1.5 text-xs" data-testid="excel-template-button"><FileSpreadsheet size={13} /> Unduh Template Opname</button></div></div></li>
             <li className="flex gap-3"><span className="num h-6 w-6 shrink-0 rounded-full bg-amber-brand text-ink-900 font-bold text-xs flex items-center justify-center">2</span><div>Isi kolom <b className="text-white">Stok Fisik (Isi)</b> di Excel. Kosongkan baris yang tidak berubah. Kolom Keterangan opsional untuk alasan.</div></li>

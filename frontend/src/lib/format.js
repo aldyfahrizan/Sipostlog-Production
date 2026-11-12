@@ -18,8 +18,9 @@ export function fmtShortDay(ymd) {
 }
 
 export function todayYMD(offsetDays = 0) {
-  const d = new Date();
-  d.setDate(d.getDate() + offsetDays);
+  // "Hari ini" mengikuti kalender WITA (UTC+8), bukan tanggal UTC.
+  const d = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  d.setUTCDate(d.getUTCDate() + offsetDays);
   return d.toISOString().slice(0, 10);
 }
 

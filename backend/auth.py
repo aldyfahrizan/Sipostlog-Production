@@ -37,12 +37,18 @@ def public_user(doc: dict) -> dict:
 
 
 async def exchange_session(db: AsyncIOMotorDatabase, session_id: str, response: Response) -> dict:
-    async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.get(EMERGENT_SESSION_URL, headers={"X-Session-ID": session_id})
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(EMERGENT_SESSION_URL, headers={"X-Session-ID": session_id})
+        if r.status_code == 200:
+            data = r.json()
+            if not isinstance(data, dict):
+                raise ValueError("session data is not an object")
+            email, token = str(data["email"]).lower(), data["session_token"]
+    except (httpx.HTTPError, ValueError, KeyError):
+        raise HTTPException(status_code=503, detail="Layanan login Google sedang tidak bisa dihubungi. Coba lagi sebentar.")
     if r.status_code != 200:
         raise HTTPException(status_code=401, detail="Sesi Google tidak valid")
-    data = r.json()
-    email = data["email"].lower()
     admin_email = os.environ.get("ADMIN_EMAIL", "").lower()
 
     user = await db.users.find_one({"email": email}, {"_id": 0})
@@ -68,7 +74,6 @@ async def exchange_session(db: AsyncIOMotorDatabase, session_id: str, response: 
         await db.users.update_one({"user_id": user["user_id"]}, {"$set": update})
         user.update(update)
 
-    token = data["session_token"]
     await db.user_sessions.insert_one({
         "user_id": user["user_id"],
         "session_token": token,

@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from pymongo import ReturnDocument
 
 from auth import public_user, require_role
+from stock_lock import BUSY, UNFINISHED, recover_expired
 
 router = APIRouter(prefix="/api")
 
@@ -89,10 +90,18 @@ async def cancel_transaction(transaction_id: str, body: ReasonBody, request: Req
     tx = await db.transactions.find_one({"transaction_id": transaction_id}, {"_id": 0})
     if not tx:
         raise HTTPException(404, "Transaksi tidak ditemukan.")
+    # Recover first, then re-read: a row of a batch that never finished is removed by the recovery, not cancelled.
+    await recover_expired(db, [tx["item_id"]])
+    tx = await db.transactions.find_one({"transaction_id": transaction_id}, {"_id": 0})
+    if not tx:
+        raise HTTPException(404, "Transaksi tidak ditemukan.")
     if tx.get("cancelled"):
         raise HTTPException(409, "Transaksi sudah dibatalkan; stok tidak diubah lagi.")
     if tx["type"] not in ("IN", "OUT", "ADJUSTMENT") or tx.get("reversal_of"):
         raise HTTPException(409, "Catatan pembatalan merupakan jejak audit dan tidak dapat dihapus.")
+    if tx.get("batch_id") and await db.stock_journal.find_one(
+            {"batch_id": tx["batch_id"], "state": {"$in": UNFINISHED}}, {"_id": 0, "token": 1}):
+        raise HTTPException(409, BUSY)
     change = -tx["change_quantity"]
     receipt = {**audit_record("transaction", transaction_id, tx["item_name"], body, user, "CANCEL"),
                "stock_change": change, "original_type": tx["type"], "item_id": tx["item_id"],
